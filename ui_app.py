@@ -11,8 +11,31 @@ from rag import RAGSystem
 from utils import MANUALS_DIR, IMAGES_DIR, setup_logger
 
 logger = setup_logger(__name__)
-
 st.set_page_config(page_title="Local Multimodal RAG", layout="wide", page_icon="🚗")
+
+header_left, header_center, header_right = st.columns([2, 6, 1.5])
+
+with header_left:
+    st.image("assets/logo_main.png", width=500)
+
+with header_center:
+    st.markdown(
+        """
+        <div style="margin-top: -20px;">
+            <h1 style="margin-bottom: 0;">Local Multimodal RAG</h1>
+            <p style="margin-top: 2px; color: #6b7280;">
+                Owner’s Manual Assistant
+            </p>
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
+
+with header_right:
+    st.image(str("assets/nsf.png"), width=60)
+    st.image(str("assets/nsf1.png"), width=60)
+
+st.divider()
 
 def load_css():
     with open("assets/style.css", "r") as f:
@@ -27,7 +50,7 @@ def load_rag_system():
             try:
                 st.session_state.rag_system = RAGSystem()
                 st.session_state.rag_system.load_models()
-                st.success("System Loaded!")
+
             except Exception as e:
                 st.error(f"Failed to load system: {e}")
                 st.stop()
@@ -39,7 +62,7 @@ def save_uploaded_file(uploaded_file):
     return save_path
 
 def process_document(file_path):
-    with st.spinner(f"{file_path.name}is currently being processed"):
+    with st.spinner(f"{file_path.name} is currently being processed"):
         processor = PDFProcessor()
         text_chunks, images_meta = processor.process_pdf(str(file_path))
         
@@ -57,24 +80,21 @@ def process_document(file_path):
         st.success("Indexing Complete!")
 
 def main():
-    st.title("Local Multimodal RAG: Owner's Manual Assistant")
 
     load_rag_system()
 
     with st.sidebar:
-        st.header("Document Ingestion")
         uploaded_file = st.file_uploader("Upload PDF Manual", type=["pdf"])
         if uploaded_file:
             if st.button("Process PDF"):
                 file_path = save_uploaded_file(uploaded_file)
                 process_document(file_path)
-        
-        st.markdown("---")
-        st.markdown("### System Status")
-        if st.session_state.rag_system.text_index:
-            st.write(f" Index contains {st.session_state.rag_system.text_index.ntotal} text chunks.")
-        else:
-            st.warning("No index found.")
+
+        st.divider()
+
+        if st.button("Clear Chat"):
+            st.session_state.messages = []
+            st.success("Chat history cleared.")
 
     # Main Chat 
     if "messages" not in st.session_state:
@@ -89,7 +109,7 @@ def main():
                     with cols[idx]:
                         try:
                             image = Image.open(img_meta["filepath"])
-                            st.image(image, caption=f"Page {img_meta['page']}", use_column_width=True)
+                            st.image(image, caption=f"Page {img_meta['page']}", use_container_width=True)
                         except:
                             st.write("Image not found")
 
