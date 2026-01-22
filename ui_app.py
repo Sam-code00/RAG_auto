@@ -24,7 +24,7 @@ with header_center:
         <div style="margin-top: -20px;">
             <h1 style="margin-bottom: 0;">Local Multimodal RAG</h1>
             <p style="margin-top: 2px; color: #6b7280;">
-                Owner’s Manual Assistant
+                Ask questions about your car's manual, including images or tables.
             </p>
         </div>
         """,
@@ -84,7 +84,10 @@ def main():
     load_rag_system()
 
     with st.sidebar:
-        uploaded_file = st.file_uploader("Upload PDF Manual", type=["pdf"])
+        
+        st.title("Upload PDF Manual")
+        uploaded_file = st.file_uploader("", type=["pdf"])
+
         if uploaded_file:
             if st.button("Process PDF"):
                 file_path = save_uploaded_file(uploaded_file)
