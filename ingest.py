@@ -1,140 +1,218 @@
-import fitz  # PyMuPDF
+import fitz
 import os
 import uuid
 import pickle
 import numpy as np
 from PIL import Image
-from PIL import Image
 from transformers import CLIPProcessor, CLIPModel
 import faiss
+from typing import List, Dict, Tuple, Optional, Callable
+from dataclasses import dataclass, asdict
+from pathlib import Path
+
 from utils import (
     IMAGES_DIR, INDEX_DIR, TEXT_EMBED_MODEL, IMAGE_EMBED_MODEL,
-    CHUNK_SIZE, CHUNK_OVERLAP, setup_logger
+    CHUNK_SIZE, CHUNK_OVERLAP, setup_logger, validate_file_exists
 )
-
-
 
 logger = setup_logger(__name__)
 
-class PDFProcessor:
-    def __init__(self):
-        # self.text_model = SentenceTransformer(TEXT_EMBED_MODEL)
-        
-        try:
-            self.clip_model = CLIPModel.from_pretrained(IMAGE_EMBED_MODEL, local_files_only=True)
-            self.clip_processor = CLIPProcessor.from_pretrained(IMAGE_EMBED_MODEL, local_files_only=True)
-        except Exception as e:
-            # handle exception if model is not found locally
-            logger.error(f"Failed to load CLIP model offline: {e}. Please run 'python download_models.py' once with internet.")
-            raise e
 
-    def process_pdf(self, pdf_path):
+@dataclass
+class TextChunk:
+    id: str
+    doc_id: str
+    page: int
+    text: str
+    char_start: int = 0
+    char_end: int = 0
+    
+    def to_dict(self) -> Dict:
+        return asdict(self)
+
+
+@dataclass 
+class ImageMetadata:
+    id: str
+    doc_id: str
+    page: int
+    filepath: str
+    context: str
+    width: int = 0
+    height: int = 0
+    img_index: int = 0
+    nearby_text: str = ""
+    
+    def to_dict(self) -> Dict:
+        return asdict(self)
+
+
+class PDFProcessor:
+    MIN_IMAGE_WIDTH = 50
+    MIN_IMAGE_HEIGHT = 50
+    
+    def __init__(self):
+        self.clip_model = CLIPModel.from_pretrained(IMAGE_EMBED_MODEL, local_files_only=True)
+        self.clip_processor = CLIPProcessor.from_pretrained(IMAGE_EMBED_MODEL, local_files_only=True)
+
+    def process_pdf(self, pdf_path: str, progress_callback: Callable[[int, int, str], None] = None) -> Tuple[List[Dict], List[Dict]]:
         doc = fitz.open(pdf_path)
         doc_id = os.path.basename(pdf_path)
+        total_pages = len(doc)
         
         text_chunks = []
         images_metadata = []
-
-        logger.info(f"Processing {doc_id} with {len(doc)} pages...")
+        page_texts = {}
 
         for page_num, page in enumerate(doc):
-            # Extraction of text and chunking
-            text = page.get_text()
+            if progress_callback:
+                progress_callback(page_num + 1, total_pages, f"Extracting page {page_num + 1}/{total_pages}")
             
-            chunks = self._chunk_text(text, CHUNK_SIZE, CHUNK_OVERLAP)
-            for chunk in chunks:
-                text_chunks.append({
-                    "id": str(uuid.uuid4()),
-                    "doc_id": doc_id,
-                    "page": page_num + 1,
-                    "text": chunk
-                })
+            page_number = page_num + 1
+            text = page.get_text()
+            page_texts[page_number] = text
+            
+            chunks = self._chunk_text_with_positions(text, CHUNK_SIZE, CHUNK_OVERLAP)
+            for chunk_text, char_start, char_end in chunks:
+                chunk = TextChunk(
+                    id=str(uuid.uuid4()),
+                    doc_id=doc_id,
+                    page=page_number,
+                    text=chunk_text,
+                    char_start=char_start,
+                    char_end=char_end
+                )
+                text_chunks.append(chunk.to_dict())
 
-           # Image Extraction
             image_list = page.get_images(full=True)
             for img_index, img in enumerate(image_list):
-                xref = img[0]
-                base_image = doc.extract_image(xref)
-                image_bytes = base_image["image"]
-                image_ext = base_image["ext"]
-                
-                image_filename = f"{os.path.splitext(doc_id)[0]}_p{page_num+1}_{img_index}.{image_ext}"
-                image_path = IMAGES_DIR / image_filename
+                img_meta = self._extract_and_validate_image(
+                    doc, img, doc_id, page_number, img_index, text
+                )
+                if img_meta:
+                    images_metadata.append(img_meta.to_dict())
 
-                # Save Image
-                with open(image_path, "wb") as f:
-                    f.write(image_bytes)
-
-                images_metadata.append({
-                    "id": str(uuid.uuid4()),
-                    "doc_id": doc_id,
-                    "page": page_num + 1,
-                    "filepath": str(image_path),
-                    "context": f"Image on page {page_num + 1} of {doc_id}" 
-                })
-
+        doc.close()
         return text_chunks, images_metadata
 
-    def _chunk_text(self, text, size, overlap):
+    def _chunk_text_with_positions(self, text: str, size: int, overlap: int) -> List[Tuple[str, int, int]]:
         chunks = []
         start = 0
-        while start < len(text):
-            end = start + size
+        text_len = len(text)
+        
+        while start < text_len:
+            end = min(start + size, text_len)
             chunk = text[start:end]
-            chunks.append(chunk)
+            if chunk.strip():
+                chunks.append((chunk, start, end))
             start += size - overlap
+            
         return chunks
 
-    def embed_text(self, chunks):
-        texts = [c["text"] for c in chunks]
-        # Ollama for embeddings
-        embeddings = []
+    def _extract_and_validate_image(self, doc: fitz.Document, img: tuple, doc_id: str,
+                                     page_number: int, img_index: int, page_text: str) -> Optional[ImageMetadata]:
+        try:
+            xref = img[0]
+            base_image = doc.extract_image(xref)
+            image_bytes = base_image["image"]
+            image_ext = base_image["ext"]
+            
+            from io import BytesIO
+            pil_image = Image.open(BytesIO(image_bytes))
+            width, height = pil_image.size
+            
+            if width < self.MIN_IMAGE_WIDTH or height < self.MIN_IMAGE_HEIGHT:
+                return None
+            
+            safe_doc_id = os.path.splitext(doc_id)[0].replace(" ", "_")
+            image_filename = f"{safe_doc_id}_p{page_number}_{img_index}.{image_ext}"
+            image_path = IMAGES_DIR / image_filename
+            
+            with open(image_path, "wb") as f:
+                f.write(image_bytes)
+            
+            if not image_path.exists():
+                return None
+            
+            absolute_image_path = str(image_path.resolve())
+            nearby_text = page_text[:200].strip() if page_text else ""
+            
+            return ImageMetadata(
+                id=str(uuid.uuid4()),
+                doc_id=doc_id,
+                page=page_number,
+                filepath=absolute_image_path,
+                context=f"Image {img_index + 1} on page {page_number} of {doc_id}",
+                width=width,
+                height=height,
+                img_index=img_index,
+                nearby_text=nearby_text
+            )
+            
+        except Exception as e:
+            logger.error(f"Failed to extract image on page {page_number}: {e}")
+            return None
+
+    def embed_text(self, chunks: List[Dict], progress_callback: Callable[[int, int, str], None] = None) -> np.ndarray:
         import ollama
-        for text in texts:
+        
+        texts = [c["text"] for c in chunks]
+        embeddings = []
+        total = len(texts)
+        
+        for i, text in enumerate(texts):
+            if progress_callback:
+                progress_callback(i + 1, total, f"Embedding text chunk {i + 1}/{total}")
             response = ollama.embeddings(model=TEXT_EMBED_MODEL, prompt=text)
             embeddings.append(response["embedding"])
         
         return np.array(embeddings).astype('float32')
 
-    def embed_images(self, images_metadata):
+    def embed_images(self, images_metadata: List[Dict], progress_callback: Callable[[int, int, str], None] = None) -> Tuple[np.ndarray, List[Dict]]:
         images = []
-        valid_indices = []
-        for idx, meta in enumerate(images_metadata):
+        valid_metadata = []
+        total = len(images_metadata)
+        
+        for i, meta in enumerate(images_metadata):
+            if progress_callback:
+                progress_callback(i + 1, total, f"Processing image {i + 1}/{total}")
+            
+            filepath = meta["filepath"]
+            if not validate_file_exists(filepath):
+                continue
+                
             try:
-                img = Image.open(meta["filepath"])
+                img = Image.open(filepath).convert("RGB")
                 images.append(img)
-                valid_indices.append(idx)
+                valid_metadata.append(meta)
             except Exception as e:
-                logger.error(f"Failed to load image {meta['filepath']}: {e}")
+                logger.error(f"Failed to load image {filepath}: {e}")
         
         if not images:
             return np.array([]).astype('float32'), []
 
         inputs = self.clip_processor(images=images, return_tensors="pt")
         image_features = self.clip_model.get_image_features(**inputs)
-        image_features = image_features / image_features.norm(p=2, dim=-1, keepdim=True) 
-        
-       
-        valid_metadata = [images_metadata[i] for i in valid_indices]
+        image_features = image_features / image_features.norm(p=2, dim=-1, keepdim=True)
         
         return image_features.detach().numpy().astype('float32'), valid_metadata
 
+
 class VectorStore:
     def __init__(self):
-        self.text_index = None
-        self.image_index = None
-        self.text_metadata = []
-        self.image_metadata = []
+        self.text_index: Optional[faiss.Index] = None
+        self.image_index: Optional[faiss.Index] = None
+        self.text_metadata: List[Dict] = []
+        self.image_metadata: List[Dict] = []
 
-    def build_index(self, text_chunks, images_metadata, text_embeddings, image_embeddings):
-        # Text Index
-        if len(text_chunks) > 0:
+    def build_index(self, text_chunks: List[Dict], images_metadata: List[Dict],
+                    text_embeddings: np.ndarray, image_embeddings: np.ndarray):
+        if len(text_chunks) > 0 and len(text_embeddings) > 0:
             d_text = text_embeddings.shape[1]
             self.text_index = faiss.IndexFlatL2(d_text)
             self.text_index.add(text_embeddings)
             self.text_metadata = text_chunks
 
-        # Image Index
         if len(images_metadata) > 0 and len(image_embeddings) > 0:
             d_image = image_embeddings.shape[1]
             self.image_index = faiss.IndexFlatL2(d_image)
@@ -151,20 +229,34 @@ class VectorStore:
         with open(INDEX_DIR / "metadata.pkl", "wb") as f:
             pickle.dump({"text": self.text_metadata, "image": self.image_metadata}, f)
 
-        logger.info("Index saved successfully.")
-
-    def load(self):
+    def load(self) -> bool:
         try:
-            self.text_index = faiss.read_index(str(INDEX_DIR / "text.index"))
-            if (INDEX_DIR / "image.index").exists():
-                self.image_index = faiss.read_index(str(INDEX_DIR / "image.index"))
+            text_index_path = INDEX_DIR / "text.index"
+            if not text_index_path.exists():
+                return False
+                
+            self.text_index = faiss.read_index(str(text_index_path))
             
-            with open(INDEX_DIR / "metadata.pkl", "rb") as f:
+            image_index_path = INDEX_DIR / "image.index"
+            if image_index_path.exists():
+                self.image_index = faiss.read_index(str(image_index_path))
+            
+            metadata_path = INDEX_DIR / "metadata.pkl"
+            with open(metadata_path, "rb") as f:
                 meta = pickle.load(f)
-                self.text_metadata = meta["text"]
-                self.image_metadata = meta["image"]
-            logger.info("Index loaded successfully.")
+                self.text_metadata = meta.get("text", [])
+                self.image_metadata = meta.get("image", [])
+            
             return True
+            
         except Exception as e:
             logger.warning(f"Could not load index: {e}")
             return False
+
+    def get_stats(self) -> Dict:
+        return {
+            "text_vectors": self.text_index.ntotal if self.text_index else 0,
+            "image_vectors": self.image_index.ntotal if self.image_index else 0,
+            "text_metadata_count": len(self.text_metadata),
+            "image_metadata_count": len(self.image_metadata),
+        }
