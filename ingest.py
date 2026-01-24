@@ -142,18 +142,15 @@ class VectorStore:
             self.image_metadata = images_metadata
 
     def save(self):
-        # Save 
-        if self.text_index:
+        if self.text_index is not None:
             faiss.write_index(self.text_index, str(INDEX_DIR / "text.index"))
-        if self.image_index:
+
+        if self.image_index is not None:
             faiss.write_index(self.image_index, str(INDEX_DIR / "image.index"))
-        
-        # Save Metadata
+
         with open(INDEX_DIR / "metadata.pkl", "wb") as f:
-            pickle.dump({
-                "text": self.text_metadata,
-                "image": self.image_metadata
-            }, f)
+            pickle.dump({"text": self.text_metadata, "image": self.image_metadata}, f)
+
         logger.info("Index saved successfully.")
 
     def load(self):

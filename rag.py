@@ -107,7 +107,7 @@ class RAGSystem:
 
         #Search Image Index
         retrieved_images = []
-        if self.vector_store.image_index:
+        if self.vector_store.image_index is not None and self.vector_store.image_index.ntotal > 0:
             D_img, I_img = self.vector_store.image_index.search(image_query_embedding, TOP_K_IMAGE)
             for idx in I_img[0]:
                 if idx != -1 and idx < len(self.vector_store.image_metadata):
