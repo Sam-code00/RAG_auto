@@ -1,132 +1,181 @@
 import streamlit as st
 import os
-# To allow offline usage
-os.environ["TRANSFORMERS_OFFLINE"] = "1"
-os.environ["HF_DATASETS_OFFLINE"] = "1"
-
+import uuid
+from pathlib import Path
 from PIL import Image
-from ingest import PDFProcessor, VectorStore
 
+from ingest import PDFProcessor, VectorStore
 from rag import RAGSystem
-from utils import MANUALS_DIR, IMAGES_DIR, setup_logger
+from utils import MANUALS_DIR, setup_logger
 
 logger = setup_logger(__name__)
 
-st.set_page_config(page_title="Local Multimodal RAG", layout="wide", page_icon="🚗")
+# Offline flags
+os.environ["TRANSFORMERS_OFFLINE"] = "1"
+os.environ["HF_DATASETS_OFFLINE"] = "1"
 
-def load_css():
-    with open("assets/style.css", "r") as f:
-        st.markdown(f"<style>{f.read()}</style>", unsafe_allow_html=True)
+st.set_page_config(page_title="Smart Assistant", layout="wide", page_icon="🚗")
 
-load_css()
+st.markdown("""
+<style>
+section[aria-label="Sidebar"] > div:first-child { height: 100vh; }
+section[aria-label="Sidebar"] div[data-testid="stSidebarContent"]{
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+.sidebar-bottom { margin-top: auto; }
+</style>
+""", unsafe_allow_html=True)
+
+# Header
+col1, col2 = st.columns([6, 1], vertical_alignment="center")
+
+with col1:
+    st.title("Smart Assistant")
+    st.caption("Ask questions about your car manual.")
+
+with col2:
+    st.markdown("<div style='text-align:right;'>", unsafe_allow_html=True)
+    st.image("assets/nsf.png", width=50)
+    st.image("assets/nsf1.png", width=50)
+    st.markdown("</div>", unsafe_allow_html=True)
+
+st.divider()
+
+
+DATA_DIR = Path("data")
+USER_UPLOADS_DIR = DATA_DIR / "user_uploads"
+USER_UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
+
 
 def load_rag_system():
-   
     if "rag_system" not in st.session_state:
         with st.spinner("Loading RAG System"):
-            try:
-                st.session_state.rag_system = RAGSystem()
-                st.session_state.rag_system.load_models()
-                st.success("System Loaded!")
-            except Exception as e:
-                st.error(f"Failed to load system: {e}")
-                st.stop()
+            st.session_state.rag_system = RAGSystem()
+            st.session_state.rag_system.load_models()
 
-def save_uploaded_file(uploaded_file):
-    save_path = MANUALS_DIR / uploaded_file.name
-    with open(save_path, "wb") as f:
+
+def save_uploaded_pdf(uploaded_file):
+    path = MANUALS_DIR / uploaded_file.name
+    with open(path, "wb") as f:
         f.write(uploaded_file.getbuffer())
-    return save_path
+    return path
 
-def process_document(file_path):
-    with st.spinner(f"{file_path.name}is currently being processed"):
-        processor = PDFProcessor()
-        text_chunks, images_meta = processor.process_pdf(str(file_path))
-        
-        st.info(f"Extracted {len(text_chunks)} text chunks and {len(images_meta)} images.")
-        
-        text_emb = processor.embed_text(text_chunks)
-        img_emb, valid_imgs = processor.embed_images(images_meta)
-        
-        store = VectorStore()
-        store.build_index(text_chunks, valid_imgs, text_emb, img_emb)
-        store.save()
-        
-        # Refresh RAG session
-        st.session_state.rag_system.refresh_index()
-        st.success("Indexing Complete!")
+
+def save_uploaded_image(uploaded_img):
+    path = USER_UPLOADS_DIR / f"{uuid.uuid4()}_{uploaded_img.name}"
+    with open(path, "wb") as f:
+        f.write(uploaded_img.getbuffer())
+    return str(path)
+
+
 
 def main():
-    st.title("Local Multimodal RAG: Owner's Manual Assistant")
-
     load_rag_system()
 
     with st.sidebar:
-        st.header("Document Ingestion")
-        uploaded_file = st.file_uploader("Upload PDF Manual", type=["pdf"])
-        if uploaded_file:
-            if st.button("Process PDF"):
-                file_path = save_uploaded_file(uploaded_file)
-                process_document(file_path)
-        
-        st.markdown("---")
-        st.markdown("### System Status")
-        if st.session_state.rag_system.text_index:
-            st.write(f" Index contains {st.session_state.rag_system.text_index.ntotal} text chunks.")
-        else:
-            st.warning("No index found.")
+        st.header("Upload PDF Manual")
+        pdf = st.file_uploader("", type=["pdf"])
 
-    # Main Chat 
+        if pdf and st.button("Process PDF"):
+            processor = PDFProcessor()
+            text_chunks, images_meta = processor.process_pdf(str(save_uploaded_pdf(pdf)))
+            text_emb = processor.embed_text(text_chunks)
+            img_emb, valid_imgs = processor.embed_images(images_meta)
+
+            store = VectorStore()
+            store.build_index(text_chunks, valid_imgs, text_emb, img_emb)
+            store.save()
+            st.session_state.rag_system.refresh_index()
+            st.toast("Manual Indexed", icon="✅")
+
+        st.divider()
+
+        if st.button("Clear Chat"):
+            st.session_state.messages = []
+            st.session_state.pop("pending_img", None)
+
+        st.markdown('<div class="sidebar-bottom">', unsafe_allow_html=True)
+
+        st.markdown("**Attach an image (optional):**")
+        user_img = st.file_uploader(
+            "Upload a photo (png/jpg)",
+            type=["png", "jpg", "jpeg"],
+            key="chat_image_upload",
+            label_visibility="collapsed",
+        )
+
+        if user_img is not None:
+            try:
+                st.session_state.pending_img = save_uploaded_image(user_img)
+                st.toast("Image Attached", icon="📎")
+            except Exception as e:
+                st.error(e)
+
+        st.markdown('</div>', unsafe_allow_html=True)
+
+    # Chat state
     if "messages" not in st.session_state:
         st.session_state.messages = []
+    if "pending_img" not in st.session_state:
+        st.session_state.pending_img = None  # stores filepath to attach to next message
 
-    for message in st.session_state.messages:
-        with st.chat_message(message["role"]):
-            st.markdown(message["content"])
-            if "images" in message:
-                cols = st.columns(len(message["images"]))
-                for idx, img_meta in enumerate(message["images"]):
-                    with cols[idx]:
+    # Render chat
+    for msg in st.session_state.messages:
+        with st.chat_message(msg["role"]):
+            st.markdown(msg["content"])
+            if msg.get("user_img"):
+                st.image(msg["user_img"], width=250)
+
+            imgs = msg.get("images") or []
+            if imgs:
+                cols = st.columns(min(3, len(imgs)))
+                for i, im in enumerate(imgs[:3]):
+                    with cols[i]:
                         try:
-                            image = Image.open(img_meta["filepath"])
-                            st.image(image, caption=f"Page {img_meta['page']}", use_column_width=True)
+                            st.image(im["filepath"], caption=f"Page {im['page']}")
                         except:
-                            st.write("Image not found")
+                            pass
 
-    if prompt := st.chat_input("Ask a question about your manual..."):
+    prompt = st.chat_input("Ask a question about your manual...")
+
+    if prompt:
+        img_path = st.session_state.pending_img
+        st.session_state.pending_img = None
+
         st.chat_message("user").markdown(prompt)
-        st.session_state.messages.append({"role": "user", "content": prompt})
+        st.session_state.messages.append(
+            {"role": "user", "content": prompt, "user_img": img_path}
+        )
 
         with st.chat_message("assistant"):
             with st.spinner("Thinking..."):
                 rag = st.session_state.rag_system
-                retrieval_results = rag.retrieve(prompt)
-                
-                
-                answer = rag.generate_answer(prompt, retrieval_results)
-                
+
+                image_hint = ""
+                if img_path and hasattr(rag, "describe_user_image"):
+                    try:
+                        image_hint = rag.describe_user_image(img_path)
+                    except Exception as e:
+                        logger.warning(f"describe_user_image failed: {e}")
+
+                try:
+                    results = rag.retrieve(prompt, image_hint=image_hint)
+                except TypeError:
+                    results = rag.retrieve(prompt)
+
+                answer = rag.generate_answer(prompt, results)
                 st.markdown(answer)
-                
-                # Display Images (Images are set to show after the answer)
-                images_to_show = retrieval_results["images"]
-                if images_to_show:
-                    st.write("**Supporting Visuals:**")
-                    cols = st.columns(min(3, len(images_to_show)))
-                    for i, img_meta in enumerate(images_to_show[:3]):
-                        # The amount of images to show is 3 for now
-                         with cols[i]:
-                            try:
-                                image = Image.open(img_meta["filepath"])
-                                st.image(image, caption=f"Page {img_meta['page']}")
-                            except:
-                                st.error(f"Missing file: {img_meta['filepath']}")
-                
-                # Save
-                st.session_state.messages.append({
-                    "role": "assistant", 
-                    "content": answer,
-                    "images": images_to_show[:3]
-                })
+
+                st.session_state.messages.append(
+                    {
+                        "role": "assistant",
+                        "content": answer,
+                        "images": results.get("images", [])[:3],
+                    }
+                )
+
 
 if __name__ == "__main__":
     main()

@@ -4,8 +4,11 @@ import numpy as np
 import ollama
 from ingest import PDFProcessor, VectorStore
 from utils import (
-    OLLAMA_MODEL_NAME, setup_logger, TOP_K_TEXT, TOP_K_IMAGE, TEXT_EMBED_MODEL
+    OLLAMA_MODEL_NAME, setup_logger, TOP_K_TEXT, TOP_K_IMAGE, TEXT_EMBED_MODEL, VLM_MODEL_NAME
 )
+import base64
+from pathlib import Path
+
 
 logger = setup_logger(__name__)
 
@@ -48,6 +51,37 @@ class RAGSystem:
             logger.info(f"Index loaded. Text chunks: {self.text_index.ntotal if self.text_index else 0}")
         else:
             logger.warning("No index found. Please ingest documents.")
+    def _image_to_base64(self, image_path: str) -> str:
+        data = Path(image_path).read_bytes()
+        return base64.b64encode(data).decode("utf-8")
+
+    def describe_user_image(self, image_path: str) -> str:
+        try:
+            img_b64 = self._image_to_base64(image_path)
+
+            messages = [
+                {
+                    "role": "system",
+                    "content": (
+                        "You are a vision assistant for vehicle maintenance. "
+                        "Describe what you see in the image in 1-3 sentences. "
+                        "If you are unsure, say what is unclear. "
+                        "Do not guess specific part numbers."
+                    )
+                },
+                {
+                    "role": "user",
+                    "content": "Describe the image for the purpose of searching a car manual.",
+                    "images": [img_b64],
+                },
+            ]
+
+            resp = ollama.chat(model=VLM_MODEL_NAME, messages=messages)
+            return resp["message"]["content"].strip()
+
+        except Exception as e:
+            logger.warning(f"VLM image description failed: {e}")
+            return ""
 
     def retrieve(self, query):
         if not self.vector_store.text_index:
@@ -91,15 +125,29 @@ class RAGSystem:
         # Messages for chat
         messages = [
             {
-                'role': 'system',
-                'content': "You are a helpful assistant answering questions about a manual. Use the provided context to answer the user's question. If the answer is not in the context, say you don't know."
+                "role": "system",
+                "content": (
+                    "You are a technical assistant answering questions strictly using a vehicle or equipment manual. "
+                    "You MUST rely only on the provided context. "
+                    "If the context does not clearly contain the answer, respond exactly with: "
+                    "'I don’t know based on the provided manual.' "
+                    "Do NOT guess, infer, or add outside knowledge. "
+                    "When the context describes procedures or steps, present them in a clear, numbered format. "
+                    "Be concise, accurate, and factual."
+                )
             },
             {
-                'role': 'user',
-                'content': f"Context:\n{context_str}\n\nQuestion:\n{query}"
+                "role": "user",
+                "content": (
+                    f"MANUAL CONTEXT:\n"
+                    f"{context_str}\n\n"
+                    f"USER QUESTION:\n"
+                    f"{query}\n\n"
+                    f"ANSWER:"
+                )
             }
         ]
-        
+
         try:
             response = ollama.chat(model=OLLAMA_MODEL_NAME, messages=messages)
             return response['message']['content']
