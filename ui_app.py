@@ -147,7 +147,15 @@ def display_retrieved_images(images: list, title: str = "📷 Supporting Visuals
         with cols[col_idx]:
             filepath = img_meta["filepath"]
             page = img_meta.get("page", "?")
-            display_image_safely(filepath, caption=f"Page {page}")
+            retrieval_type = img_meta.get("_retrieval_type", "")
+            score = img_meta.get("_retrieval_score", 0)
+            
+            # Show retrieval info in caption for debugging (can be removed later)
+            caption = f"Page {page}"
+            if retrieval_type:
+                caption += f" ({retrieval_type}: {score:.2f})"
+            
+            display_image_safely(filepath, caption=caption)
 
 
 def render_sidebar():
@@ -161,16 +169,11 @@ def render_sidebar():
                 file_path = save_uploaded_pdf(uploaded_pdf)
                 process_document(file_path)
 
-        st.divider()
-
-        if st.button("🗑️ Clear Chat"):
-            st.session_state.messages = []
-            st.session_state.pending_img = None
-            st.rerun()
 
         st.divider()
         
         st.markdown("**📎 Attach Image (optional):**")
+        st.caption("Upload a photo of your vehicle for visual guidance")
         user_img = st.file_uploader("Upload a photo", type=["png", "jpg", "jpeg"], 
                                      key="chat_image_upload", label_visibility="collapsed")
 
@@ -185,13 +188,22 @@ def render_sidebar():
                 st.session_state.pending_img = None
                 st.rerun()
 
+        st.divider()
+        for _ in range(15):
+            st.write("")
+
+        if st.button("🗑️ Clear Chat"):
+            st.session_state.messages = []
+            st.session_state.pending_img = None
+            st.rerun()
+
 
 def render_chat_history():
     for msg in st.session_state.messages:
         with st.chat_message(msg["role"]):
             st.markdown(msg.get("content", ""))
             if msg.get("user_img"):
-                display_image_safely(msg["user_img"], "Attached image", width=280)
+                display_image_safely(msg["user_img"], "Your uploaded image", width=280)
             if msg["role"] == "assistant" and msg.get("images"):
                 display_retrieved_images(msg["images"])
 
@@ -205,15 +217,23 @@ def handle_user_query(prompt: str):
     with st.chat_message("user"):
         st.markdown(prompt)
         if img_path:
-            display_image_safely(img_path, "Attached image", width=280)
+            display_image_safely(img_path, "Your uploaded image", width=280)
 
     with st.chat_message("assistant"):
-        with st.spinner("Searching manual..."):
-            rag = st.session_state.rag_system
+        rag = st.session_state.rag_system
+        
+        with st.spinner("Analyzing your question and searching manual..."):
             results = rag.retrieve(prompt, user_image_path=img_path)
 
-        with st.spinner("Generating answer..."):
-            answer = rag.generate_answer(prompt, results)
+        # Show what was detected in user's image (if any)
+        user_img_desc = results.get("user_image_description", "")
+        if user_img_desc and img_path:
+            with st.expander("🔍 What I see in your photo", expanded=False):
+                st.write(user_img_desc)
+
+        with st.spinner("Generating answer with visual guidance..." if img_path else "Generating answer..."):
+            # Pass user_image_path to generate_answer for VLM-powered visual guidance
+            answer = rag.generate_answer(prompt, results, user_image_path=img_path)
 
         st.markdown(answer)
 
@@ -221,7 +241,11 @@ def handle_user_query(prompt: str):
         if images:
             display_retrieved_images(images)
 
-        st.session_state.messages.append({"role": "assistant", "content": answer, "images": images})
+        st.session_state.messages.append({
+            "role": "assistant", 
+            "content": answer, 
+            "images": images
+        })
 
 
 def main():
@@ -231,7 +255,7 @@ def main():
     col1, col2 = st.columns([5, 1])
     with col1:
         st.title("SMART Assistant")
-        st.caption("Ask questions about your vehicle's manual.")
+        st.caption("Ask questions about your vehicle's manual. Upload a photo for visual guidance!")
     
     with col2:
         col3, col4 = st.columns([1, 1])

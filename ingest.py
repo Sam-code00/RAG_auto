@@ -9,10 +9,12 @@ import faiss
 from typing import List, Dict, Tuple, Optional, Callable
 from dataclasses import dataclass, asdict
 from pathlib import Path
+from io import BytesIO
 
 from utils import (
     IMAGES_DIR, INDEX_DIR, TEXT_EMBED_MODEL, IMAGE_EMBED_MODEL,
-    CHUNK_SIZE, CHUNK_OVERLAP, setup_logger, validate_file_exists
+    CHUNK_SIZE, CHUNK_OVERLAP, setup_logger, validate_file_exists,
+    check_image_dimensions, IMAGE_FILTER_CONFIG, ImageFilterConfig
 )
 
 logger = setup_logger(__name__)
@@ -48,12 +50,10 @@ class ImageMetadata:
 
 
 class PDFProcessor:
-    MIN_IMAGE_WIDTH = 50
-    MIN_IMAGE_HEIGHT = 50
-    
-    def __init__(self):
+    def __init__(self, image_filter_config: ImageFilterConfig = None):
         self.clip_model = CLIPModel.from_pretrained(IMAGE_EMBED_MODEL, local_files_only=True)
         self.clip_processor = CLIPProcessor.from_pretrained(IMAGE_EMBED_MODEL, local_files_only=True)
+        self.image_filter_config = image_filter_config or IMAGE_FILTER_CONFIG
 
     def process_pdf(self, pdf_path: str, progress_callback: Callable[[int, int, str], None] = None) -> Tuple[List[Dict], List[Dict]]:
         doc = fitz.open(pdf_path)
@@ -63,6 +63,8 @@ class PDFProcessor:
         text_chunks = []
         images_metadata = []
         page_texts = {}
+        
+        filtered_count = 0
 
         for page_num, page in enumerate(doc):
             if progress_callback:
@@ -86,13 +88,19 @@ class PDFProcessor:
 
             image_list = page.get_images(full=True)
             for img_index, img in enumerate(image_list):
-                img_meta = self._extract_and_validate_image(
+                img_meta, was_filtered = self._extract_and_validate_image(
                     doc, img, doc_id, page_number, img_index, text
                 )
                 if img_meta:
                     images_metadata.append(img_meta.to_dict())
+                elif was_filtered:
+                    filtered_count += 1
 
         doc.close()
+        
+        logger.info(f"Processed {total_pages} pages: {len(text_chunks)} text chunks, "
+                   f"{len(images_metadata)} images kept, {filtered_count} images filtered out")
+        
         return text_chunks, images_metadata
 
     def _chunk_text_with_positions(self, text: str, size: int, overlap: int) -> List[Tuple[str, int, int]]:
@@ -110,19 +118,25 @@ class PDFProcessor:
         return chunks
 
     def _extract_and_validate_image(self, doc: fitz.Document, img: tuple, doc_id: str,
-                                     page_number: int, img_index: int, page_text: str) -> Optional[ImageMetadata]:
+                                     page_number: int, img_index: int, page_text: str) -> Tuple[Optional[ImageMetadata], bool]:
+        """
+        Extract and validate an image from the PDF.
+        Returns (ImageMetadata or None, was_filtered: bool)
+        """
         try:
             xref = img[0]
             base_image = doc.extract_image(xref)
             image_bytes = base_image["image"]
             image_ext = base_image["ext"]
             
-            from io import BytesIO
             pil_image = Image.open(BytesIO(image_bytes))
             width, height = pil_image.size
             
-            if width < self.MIN_IMAGE_WIDTH or height < self.MIN_IMAGE_HEIGHT:
-                return None
+            # Apply dimension/aspect ratio filtering
+            if not check_image_dimensions(width, height, self.image_filter_config):
+                logger.debug(f"Filtered image on page {page_number}: {width}x{height} "
+                           f"(aspect: {width/height:.2f})")
+                return None, True
             
             safe_doc_id = os.path.splitext(doc_id)[0].replace(" ", "_")
             image_filename = f"{safe_doc_id}_p{page_number}_{img_index}.{image_ext}"
@@ -132,10 +146,10 @@ class PDFProcessor:
                 f.write(image_bytes)
             
             if not image_path.exists():
-                return None
+                return None, False
             
             absolute_image_path = str(image_path.resolve())
-            nearby_text = page_text[:200].strip() if page_text else ""
+            nearby_text = page_text[:300].strip() if page_text else ""
             
             return ImageMetadata(
                 id=str(uuid.uuid4()),
@@ -147,11 +161,11 @@ class PDFProcessor:
                 height=height,
                 img_index=img_index,
                 nearby_text=nearby_text
-            )
+            ), False
             
         except Exception as e:
             logger.error(f"Failed to extract image on page {page_number}: {e}")
-            return None
+            return None, False
 
     def embed_text(self, chunks: List[Dict], progress_callback: Callable[[int, int, str], None] = None) -> np.ndarray:
         import ollama
