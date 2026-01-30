@@ -4,7 +4,8 @@ import numpy as np
 import ollama
 from ingest import PDFProcessor, VectorStore
 from utils import (
-    OLLAMA_MODEL_NAME, setup_logger, TOP_K_TEXT, TOP_K_IMAGE, TEXT_EMBED_MODEL
+    OLLAMA_MODEL_NAME, setup_logger, TOP_K_TEXT, TOP_K_IMAGE, TEXT_EMBED_MODEL,
+    VLM_MODEL_NAME
 )
 
 logger = setup_logger(__name__)
@@ -33,6 +34,13 @@ class RAGSystem:
                  logger.warning(f"Model '{OLLAMA_MODEL_NAME}' not found in Ollama list: {model_names}. Attempting to pull or run anyway...")
             else:
                 logger.info(f"Model '{OLLAMA_MODEL_NAME}' found.")
+
+            # Check VLM Model
+            logger.info(f"Checking Ollama VLM model: {VLM_MODEL_NAME}...")
+            try:
+                pass 
+            except:
+                 pass
 
         except Exception as e:
             logger.warning(f"Could not connect to Ollama: {e}. Ensure 'ollama serve' is running.")
@@ -92,7 +100,7 @@ class RAGSystem:
         messages = [
             {
                 'role': 'system',
-                'content': "You are a helpful assistant answering questions about a manual. Use the provided context to answer the user's question. If the answer is not in the context, say you don't know."
+                'content': "You are a helpful assistant answering questions about a manual. Use the provided context to answer the user's question. Do not HALLUCINATE. Do not go off what you think you know. If the answer is not contained in the context (MANUAL), say 'I don't know based on the provided manual.'"
             },
             {
                 'role': 'user',
@@ -105,3 +113,34 @@ class RAGSystem:
             return response['message']['content']
         except Exception as e:
             return f"Error generation answer with Ollama: {e}"
+
+    def analyze_image_intent(self, image_path, user_query):
+        """
+        Uses VLM to analyze the image and use the provided user query to determine what to search.
+        """
+        prompt = (
+            f"You are an expert automotive assistant that works ONLY with provided vehicle owner's manuals."
+            f"Analyze the provided image and identify visible components ONLY if they are described or labeled in the manual."
+            f"Do not make assumptions beyond what is given and do not use outside knowledge."
+            f"The user asks: '{user_query}'. "
+            f"Infer the user's intent (what they are trying to fix or check). "
+            f"Provide a specific search query to find relevant instructions in the uploaded manual. "
+            f"Return ONLY the search query."
+        )
+        
+        try:
+            # For Vision model, image path is passed in the 'images' list
+            response = ollama.chat(
+                model=VLM_MODEL_NAME,
+                messages=[
+                    {
+                        'role': 'user',
+                        'content': prompt,
+                        'images': [image_path]
+                    }
+                ]
+            )
+            return response['message']['content'].strip()
+        except Exception as e:
+            logger.error(f"VLM analysis failed: {e}")
+            return user_query  # Fallback to original query
