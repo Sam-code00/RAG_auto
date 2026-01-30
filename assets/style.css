@@ -1,13 +1,3 @@
-@import url('https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap');
-
-html,
-body,
-[class*="st-"] {
-    font-family: 'Outfit', sans-serif;
-    color: #e0e0e0;
-    width: 100%;
-}
-
 .stApp {
     background-color: #0e1117;
     background-image:
@@ -77,16 +67,28 @@ h1 {
 }
 
 
+.stChatInputContainer {
+    max-width: 70%;
+    margin: 0 auto;
+}
+
 .stChatInputContainer textarea {
     background-color: rgba(0, 0, 0, 0.3);
     border: 1px solid rgba(255, 255, 255, 0.2);
     border-radius: 12px;
     color: white;
+    height: 50px !important;
+    min-height: 50px !important;
+    max-height: 50px !important;
 }
 
 .stChatInputContainer textarea:focus {
     border-color: #4b6cb7;
     box-shadow: 0 0 0 2px rgba(75, 108, 183, 0.2);
+}
+
+.stChatInputContainer button[kind="primary"] {
+    display: none !important;
 }
 
 [data-testid="stImage"] img {

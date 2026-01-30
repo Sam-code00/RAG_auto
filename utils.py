@@ -15,6 +15,7 @@ for d in [MANUALS_DIR, IMAGES_DIR, INDEX_DIR, MODELS_DIR]:
     d.mkdir(parents=True, exist_ok=True)
 
 OLLAMA_MODEL_NAME = "gemma3:4b"
+VLM_MODEL_NAME = "qwen3-vl:8b"
 
 TEXT_EMBED_MODEL = "nomic-embed-text"
 IMAGE_EMBED_MODEL = "openai/clip-vit-base-patch32"
