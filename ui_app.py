@@ -11,10 +11,30 @@ from rag import RAGSystem
 from utils import MANUALS_DIR, IMAGES_DIR, setup_logger
 import io
 import tempfile
+from pathlib import Path
 
 logger = setup_logger(__name__)
 
 st.set_page_config(page_title="Local Multimodal RAG", layout="wide", page_icon="")
+
+col1, col2 = st.columns([5, 1])
+with col1:
+    st.title("SMART Assistant")
+    st.caption("Ask questions about your vehicle's manual. Upload a photo for visual guidance!")
+    
+with col2:
+    col3, col4 = st.columns([1, 1])
+    with col3:
+        logo_path = Path("assets/SMART.png")
+        if logo_path.exists():
+            st.image(str(logo_path), width=80)
+    with col4:
+        logo_path2 = Path("assets/nsf1.png")
+        if logo_path2.exists():
+            st.image(str(logo_path2), width=80)      
+    
+
+
 
 def load_css():
     with open("assets/style.css", "r") as f:
@@ -43,7 +63,7 @@ def process_document(file_path):
     processor = PDFProcessor()
     text_chunks, images_meta = processor.process_pdf(str(file_path))
     
-    st.info(f"Extracted {len(text_chunks)} text chunks and {len(images_meta)} images.")
+    st.toast(f"Extracted {len(text_chunks)} text chunks and {len(images_meta)} images.", icon="📄")
     
     text_emb = processor.embed_text(text_chunks)
     img_emb, valid_imgs = processor.embed_images(images_meta)
@@ -53,12 +73,10 @@ def process_document(file_path):
     store.save()
     
     st.session_state.rag_system.refresh_index()
-    st.success("Indexing Complete!")
+    st.toast("Indexing Complete!", icon="✅")
 
 
 def main():
-    st.title("Local Multimodal RAG: Owner's Manual Assistant")
-
     load_rag_system()
 
     with st.sidebar:
@@ -104,7 +122,6 @@ def main():
         key="query_img",
         label_visibility="collapsed"
     )
-    st.caption("You can also drag and drop an images above")
 
     if prompt := st.chat_input("Ask a question about uploaded manual"):
         user_msg = {"role": "user", "content": prompt}
