@@ -100,3 +100,31 @@ h1 {
 [data-testid="stImage"] img:hover {
     transform: scale(1.02);
 }
+
+
+/* ============================================
+   Additional Styles for Voice/Upload Buttons
+   ============================================ */
+
+/* Remove container borders */
+[data-testid="stVerticalBlockBorderWrapper"] {
+    border: none !important;
+    box-shadow: none !important;
+}
+
+/* Voice input bar styling */
+.voice-bar {
+    display: flex;
+    justify-content: center;
+    gap: 10px;
+    padding: 10px 0;
+}
+
+/* Small icon buttons */
+.icon-btn button {
+    width: 45px !important;
+    height: 45px !important;
+    padding: 0 !important;
+    border-radius: 50% !important;
+    font-size: 20px !important;
+}
