@@ -1,148 +1,81 @@
-"""
-Speech-to-Text Module using Vosk
-Click to start, click to stop recording
-"""
+import io
+import numpy as np
+import whisper
 
-import os
-import json
-import queue
-import threading
-from pathlib import Path
+MODEL_NAME = "base"
 
-import sounddevice as sd
-from vosk import Model, KaldiRecognizer
-
-SAMPLE_RATE = 16000
-MODEL_PATH = Path("models/vosk-model-small-en-us-0.15")
-
-
-class Recorder:
-    """Singleton recorder that persists across Streamlit reruns"""
-    _instance = None
-    
-    def __new__(cls):
-        if cls._instance is None:
-            cls._instance = super().__new__(cls)
-            cls._instance._initialized = False
-        return cls._instance
-    
-    def __init__(self):
-        if self._initialized:
-            return
-        
-        self.model = None
-        self.recognizer = None
-        self.stream = None
-        self.audio_queue = queue.Queue()
-        self.is_recording = False
-        self.transcript = ""
-        self._initialized = True
-    
-    def load_model(self):
-        if self.model is None:
-            if not MODEL_PATH.exists():
-                raise FileNotFoundError(
-                    f"Vosk model not found at {MODEL_PATH}. "
-                    "Run 'python download_models.py' first."
-                )
-            self.model = Model(str(MODEL_PATH))
-        return self.model
-    
-    def _audio_callback(self, indata, frames, time, status):
-        if self.is_recording:
-            self.audio_queue.put(bytes(indata))
-    
-    def start(self):
-        if self.is_recording:
-            return
-        
-        self.load_model()
-        
-        # Clear state
-        self.transcript = ""
-        while not self.audio_queue.empty():
-            try:
-                self.audio_queue.get_nowait()
-            except:
-                pass
-        
-        # New recognizer
-        self.recognizer = KaldiRecognizer(self.model, SAMPLE_RATE)
-        self.recognizer.SetWords(True)
-        
-        # Start stream
-        self.is_recording = True
-        self.stream = sd.RawInputStream(
-            samplerate=SAMPLE_RATE,
-            blocksize=8000,
-            dtype='int16',
-            channels=1,
-            callback=self._audio_callback
-        )
-        self.stream.start()
-    
-    def stop(self):
-        if not self.is_recording:
-            return self.transcript
-        
-        self.is_recording = False
-        
-        # Stop stream
-        if self.stream:
-            self.stream.stop()
-            self.stream.close()
-            self.stream = None
-        
-        # Process all audio
-        transcript = ""
-        while not self.audio_queue.empty():
-            try:
-                data = self.audio_queue.get_nowait()
-                if self.recognizer.AcceptWaveform(data):
-                    result = json.loads(self.recognizer.Result())
-                    text = result.get("text", "")
-                    if text:
-                        transcript += " " + text if transcript else text
-            except:
-                break
-        
-        # Final result
-        if self.recognizer:
-            final = json.loads(self.recognizer.FinalResult())
-            text = final.get("text", "")
-            if text:
-                transcript += " " + text if transcript else text
-        
-        self.transcript = transcript.strip()
-        return self.transcript
-
-
-# Global singleton
-_recorder = None
-
-
-def get_recorder():
-    global _recorder
-    if _recorder is None:
-        _recorder = Recorder()
-    return _recorder
+# Module-level model cache
+_model = None
 
 
 def load_model():
-    return get_recorder().load_model()
-
-
-def start_recording():
-    get_recorder().start()
-
-
-def stop_recording():
-    return get_recorder().stop()
-
-
-def is_recording():
-    return get_recorder().is_recording
+    global _model
+    if _model is None:
+        print("Loading Whisper model...")
+        _model = whisper.load_model(MODEL_NAME)
+        print("Whisper model loaded successfully")
+    return _model
 
 
 def is_model_loaded():
-    return get_recorder().model is not None
+    return _model is not None
+
+
+def transcribe_audio(audio_bytes: bytes) -> str:
+    if not audio_bytes:
+        print("No audio bytes provided")
+        return ""
+    
+    print(f"Received audio: {len(audio_bytes)} bytes")
+    
+    model = load_model()
+    
+    try:
+        # Decode WAV bytes directly using scipy (no ffmpeg needed)
+        import scipy.io.wavfile as wavfile
+        
+        # Read WAV from bytes
+        audio_buffer = io.BytesIO(audio_bytes)
+        sample_rate, audio_data = wavfile.read(audio_buffer)
+        
+        print(f"Sample rate: {sample_rate}, Audio shape: {audio_data.shape}, Dtype: {audio_data.dtype}")
+        
+        # Convert to mono if stereo
+        if len(audio_data.shape) > 1:
+            audio_data = audio_data.mean(axis=1)
+        
+        # Convert to float32 and normalize to [-1, 1]
+        if audio_data.dtype == np.int16:
+            audio_float = audio_data.astype(np.float32) / 32768.0
+        elif audio_data.dtype == np.int32:
+            audio_float = audio_data.astype(np.float32) / 2147483648.0
+        elif audio_data.dtype == np.float32:
+            audio_float = audio_data
+        else:
+            audio_float = audio_data.astype(np.float32)
+        
+        # Resample to 16kHz if needed (Whisper expects 16kHz)
+        if sample_rate != 16000:
+            print(f"Resampling from {sample_rate}Hz to 16000Hz")
+            # Simple resampling using numpy interpolation
+            duration = len(audio_float) / sample_rate
+            target_length = int(duration * 16000)
+            audio_float = np.interp(
+                np.linspace(0, len(audio_float), target_length),
+                np.arange(len(audio_float)),
+                audio_float
+            ).astype(np.float32)
+        
+        print(f"Final audio shape: {audio_float.shape}")
+        
+        # Transcribe directly from numpy array
+        result = model.transcribe(audio_float, fp16=False, language="en")
+        text = (result.get("text") or "").strip()
+        print(f"Transcription result: '{text}'")
+        return text
+        
+    except Exception as e:
+        print(f"Transcription error: {type(e).__name__}: {e}")
+        import traceback
+        traceback.print_exc()
+        return ""

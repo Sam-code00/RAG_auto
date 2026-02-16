@@ -20,13 +20,21 @@ VLM_MODEL_NAME = "qwen3-vl:8b"
 TEXT_EMBED_MODEL = "nomic-embed-text"
 IMAGE_EMBED_MODEL = "openai/clip-vit-base-patch32"
 
-# Chunking
-CHUNK_SIZE = 600  # characters approx
-CHUNK_OVERLAP = 100
+# Chunking: structure-aware settings
+CHUNK_SIZE = 1500       # Max chars per chunk (sections are semantic, so larger is fine)
+CHUNK_OVERLAP = 200     # Overlap for recursive fallback splits
+MIN_CHUNK_SIZE = 100    # Skip chunks smaller than this
+TABLE_MAX_CHARS = 3000  # Tables can be larger since they're self-contained
 
 # To retrieve
 TOP_K_TEXT = 5
 TOP_K_IMAGE = 3
+
+# Image filtering
+IMAGE_COSINE_MIN = 0.15
+IMAGE_MAX_RETURN = 3
+IMAGE_GAP_MIN = 0.08
+
 
 def setup_logger(name):
     logger = logging.getLogger(name)

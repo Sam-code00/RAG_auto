@@ -8,6 +8,6 @@ faiss-cpu
 pillow
 numpy
 
-# Speech-to-text (Vosk)
-vosk
-sounddevice
+# Speech-to-text (Whisper)
+openai-whisper
+scipy
