@@ -1,0 +1,61 @@
+The Problem
+
+        Vehicle manuals are 500–1,000+ pages long.
+
+        Critical maintenance steps are buried in dense text.
+
+        Diagrams are separated from instructions.
+
+        Users waste time flipping pages, or worse, misinterpret procedures.
+
+        Most AI assistants hallucinate and aren’t grounded in the actual manual.
+
+
+What This System Does
+
+        Turns any automotive PDF manual into an interactive AI assistant.
+
+        Lets users ask natural language questions instead of searching manually.
+
+        Retrieves both text instructions AND supporting diagrams.
+
+        Allows users to upload a photo (dashboard light, engine component).
+
+        Uses a vision-language model to understand the image and convert it into a precise search query.
+
+        Generates answers strictly grounded in the uploaded manual — no outside knowledge.
+
+
+What Makes It Different
+
+        Fully local: runs on-device using Ollama (LLM + VLM).
+
+        No cloud APIs → private, secure, offline-capable.
+
+        Uses multimodal retrieval:
+
+            Text embeddings for procedural instructions.
+
+            CLIP image embeddings for diagram retrieval.
+
+            Vector search powered by FAISS for fast semantic retrieval.
+
+        Explicit “do not hallucinate” system prompting to ensure grounding.
+
+
+Why It Matters
+
+        Faster procedural lookup for safety-critical tasks.
+
+        Reduces human error in maintenance scenarios.
+
+        Makes complex manuals accessible to non-experts.
+
+        Bridges the gap between text-heavy documentation and visual reasoning.
+
+
+
+Start with Why
+Walk through poster
+
+Conclusions: major things we have accomplished.

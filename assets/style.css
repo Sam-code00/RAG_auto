@@ -102,17 +102,11 @@ h1 {
 }
 
 
-/* ============================================
-   Additional Styles for Voice/Upload Buttons
-   ============================================ */
-
-/* Remove container borders */
 [data-testid="stVerticalBlockBorderWrapper"] {
     border: none !important;
     box-shadow: none !important;
 }
 
-/* Voice input bar styling */
 .voice-bar {
     display: flex;
     justify-content: center;
@@ -120,7 +114,6 @@ h1 {
     padding: 10px 0;
 }
 
-/* Small icon buttons */
 .icon-btn button {
     width: 45px !important;
     height: 45px !important;
