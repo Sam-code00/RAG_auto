@@ -84,7 +84,6 @@ def display_chat_messages():
         with st.chat_message(msg["role"]):
             st.markdown(msg["content"])
 
-            # ✅ show user's attached image directly under their question
             if msg.get("uploaded_image_path"):
                 try:
                     st.image(msg["uploaded_image_path"], caption="Attached Image", width=260)
@@ -120,12 +119,6 @@ def _save_bytes_to_temp_file(raw_bytes: bytes, filename: str) -> str:
 
 
 def queue_query(prompt_text: str, image_file=None, image_bytes: bytes = None, image_name: str = "upload.png"):
-    """
-    Queue a user query for processing. Supports:
-      - image_file: Streamlit UploadedFile (from st.file_uploader)
-      - image_bytes: raw bytes (from multimodal component base64 decode)
-    Also ensures the image shows under the user's chat bubble via uploaded_image_path.
-    """
     user_msg = {"role": "user", "content": prompt_text}
     img_path = None
 
