@@ -326,10 +326,9 @@ def main():
     )
 
     if prompt:
-        # Extract the string text from the ChatInputValue object
         text = (prompt.text or "").strip()
 
-        # Handle Audio Transcription
+        #Audio Transcription
         if (not text) and getattr(prompt, "audio", None):
             try:
                 audio_bytes = prompt.audio.getvalue()
@@ -340,7 +339,7 @@ def main():
                 logger.error(f"Transcription failed: {e}")
                 text = ""
 
-        # Handle Image Extraction
+        #Image Extraction
         img_bytes = None
         img_name = "upload.png"
         files = getattr(prompt, "files", [])
@@ -358,7 +357,6 @@ def main():
 
         # Check if we have a valid query (text or image)
         if text or img_bytes:
-            # FIX: Use 'text' here, NOT 'prompt'
             user_msg = {"role": "user", "content": text if text else "[Image Upload]"}
             
             img_path = None
@@ -371,7 +369,6 @@ def main():
             # Add to history and queue for processing
             st.session_state.messages.append(user_msg)
             
-            # Use the variables we just created to trigger the RAG
             queue_query(text, image_bytes=img_bytes, image_name=img_name)
             
             st.rerun()

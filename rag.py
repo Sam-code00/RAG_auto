@@ -75,16 +75,30 @@ class RAGSystem:
         retrieved_text = all_text_hits[:TOP_K_TEXT]  # keep answer context small/faithful
 
 
+        # relevant_pages = set()
+        # for chunk in retrieved_text:
+        #     page = chunk.get("page")
+        #     if page is None:
+        #         continue
+        #     page = int(page)
+        #     relevant_pages.add(page)
+        #     for dp in (-3, -2, -1, 1, 2, 3):
+        #         pn = page + dp
+        #         if pn >= 1:
+        #             relevant_pages.add(pn)
+
         relevant_pages = set()
         for chunk in retrieved_text:
             page = chunk.get("page")
             if page is None:
                 continue
             page = int(page)
+            
+            # This adds the exact page the text was found on
             relevant_pages.add(page)
             for dp in (-1, 1):
                 pn = page + dp
-                if pn >= 1:
+                if pn >= 1: # Ensure we don't try to look for page 0 or negative pages
                     relevant_pages.add(pn)
 
         # Page-filter images
@@ -202,6 +216,12 @@ class RAGSystem:
         else:
             retrieved_images = page_filtered_images[:TOP_K_IMAGE]
 
+
+        if not retrieved_images and page_filtered_images:
+            # If CLIP found nothing, just grab the images from the top text result's page
+            top_page = retrieved_text[0].get("page")
+            retrieved_images = [img for img in page_filtered_images if img.get("page") == top_page][:3]
+
         logger.info(
             f"Retrieved {len(retrieved_text)} text chunks from pages {sorted(relevant_pages)}, "
             f"{len(retrieved_images)} images (from {len(page_filtered_images)} page-filtered, "
@@ -308,7 +328,9 @@ class RAGSystem:
         except Exception as e:
             return f"Error generating answer with Ollama: {e}"
 
-    def analyze_image_intent(self, image_path, user_query):
+    def analyze_image_intent(self, img_path, user_query):
+        # Debug code
+        print(f"DEBUG: Starting VLM analysis for {img_path}")
         prompt = (
             "You are a certified automotive assistant that works ONLY with the user's uploaded vehicle manual. "
             "Analyze the uploaded image and identify visible vehicle components ONLY if they are clearly described "
@@ -330,10 +352,25 @@ class RAGSystem:
                 messages=[{
                     'role': 'user',
                     'content': prompt,
-                    'images': [image_path]
+                    'images': [img_path]
                 }]
             )
-            return response['message']['content'].strip()
+
+
+    
+            raw_content = response['message']['content'].strip()
+            clean_query = raw_content.split('\n')[0]
+            fillers = ["here is the search query:", "refined search query:", "search query:"]
+            for filler in fillers:
+                if clean_query.lower().startswith(filler):
+                    clean_query = clean_query.lower().replace(filler, "").strip()
+            clean_query = clean_query.replace('"', '').replace("'", "")
+            # print(f"DEBUG: Cleaned query: {clean_query}")
+            return clean_query
+
+
+
+            # return response['message']['content'].strip()
         except Exception as e:
             logger.error(f"VLM analysis failed: {e}")
             return user_query
