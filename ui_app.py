@@ -73,7 +73,7 @@ def process_document(file_path):
         st.write("Extracting text and identifying diagrams...")
         text_chunks, images_meta = processor.process_pdf(str(file_path))
         progress_bar.progress(25)
-        st.write(f"✅ Found {len(text_chunks)} text segments and {len(images_meta)} images.")
+        st.write(f"Found {len(text_chunks)} text segments and {len(images_meta)} images.")
         st.write("Generating vector embeddings for text search...")
         text_emb = processor.embed_text(text_chunks)
         progress_bar.progress(50)
@@ -93,7 +93,7 @@ def process_document(file_path):
         status.update(label="Manual Processing Complete!", state="complete", expanded=False)
 
     st.balloons()  # Visual celebration for your demo
-    st.toast("Manual is ready for questions.", icon="✅")
+    st.toast("Manual is ready for questions.")
 
 def display_chat_messages():
     for msg in st.session_state.messages:
