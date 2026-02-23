@@ -16,6 +16,7 @@ for d in [MANUALS_DIR, IMAGES_DIR, INDEX_DIR, MODELS_DIR]:
 
 OLLAMA_MODEL_NAME = "mistral:7b"
 VLM_MODEL_NAME = "qwen3-vl:8b"
+# VLM_MODEL_NAME = "moondream:latest"
 
 TEXT_EMBED_MODEL = "nomic-embed-text"
 IMAGE_EMBED_MODEL = "openai/clip-vit-base-patch32"
