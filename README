@@ -1,0 +1,18 @@
+=================================================
+
+TO RUN DOCKER:
+docker compose up --build
+
+
+This project already includes dockerfile, .dockerignore, and docker-compose.yml.
+    - You should not have to pull and serve any ollama models.
+
+=================================================
+
+TO RUN LOCALLY:
+
+streamlit run ui_app.py
+
+Must have ollama models, whisper-base, nomic-embed-text, and CLIP installed.
+
+=================================================

@@ -1,4 +1,4 @@
-streamlit
+streamlit==1.54.0
 ollama
 pymupdf
 sentence-transformers
@@ -7,7 +7,5 @@ torch
 faiss-cpu
 pillow
 numpy
-
-# Speech-to-text (Whisper)
-openai-whisper
 scipy
+openai-whisper

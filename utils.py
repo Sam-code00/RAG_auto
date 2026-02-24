@@ -16,15 +16,16 @@ for d in [MANUALS_DIR, IMAGES_DIR, INDEX_DIR, MODELS_DIR]:
 
 OLLAMA_MODEL_NAME = "mistral:7b"
 VLM_MODEL_NAME = "qwen3-vl:8b"
+# VLM_MODEL_NAME = "moondream:latest"
 
 TEXT_EMBED_MODEL = "nomic-embed-text"
 IMAGE_EMBED_MODEL = "openai/clip-vit-base-patch32"
 
-# Chunking: structure-aware settings
-CHUNK_SIZE = 1500       # Max chars per chunk (sections are semantic, so larger is fine)
-CHUNK_OVERLAP = 200     # Overlap for recursive fallback splits
-MIN_CHUNK_SIZE = 100    # Skip chunks smaller than this
-TABLE_MAX_CHARS = 3000  # Tables can be larger since they're self-contained
+# Chunking
+CHUNK_SIZE = 1500
+CHUNK_OVERLAP = 200
+MIN_CHUNK_SIZE = 100
+TABLE_MAX_CHARS = 3000 
 
 # To retrieve
 TOP_K_TEXT = 5

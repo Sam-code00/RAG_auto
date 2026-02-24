@@ -2,19 +2,20 @@ import os
 import base64
 import tempfile
 from pathlib import Path
-
+import shutil
 import streamlit as st
 from PIL import Image
 
 from ingest import PDFProcessor, VectorStore
 from rag import RAGSystem
-from utils import MANUALS_DIR, setup_logger
+from utils import MANUALS_DIR, INDEX_DIR, IMAGES_DIR, setup_logger
 import speech_to_text as stt
 
 logger = setup_logger(__name__)
 
 st.set_page_config(page_title="SMART Assistant", layout="wide", page_icon="🚗")
-
+UPLOAD_DIR = IMAGES_DIR / "uploads"
+UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
 def load_css():
     css_path = Path("assets/style.css")
@@ -64,20 +65,35 @@ def save_uploaded_file(uploaded_file):
 
 
 def process_document(file_path):
-    processor = PDFProcessor()
-    text_chunks, images_meta = processor.process_pdf(str(file_path))
-    st.toast(f"Extracted {len(text_chunks)} text chunks and {len(images_meta)} images.", icon="📄")
+    # Show status of processing
+    with st.status("Processing Manual...", expanded=True) as status:
+        st.write("Initializing PDF Processor...")
+        progress_bar = st.progress(0)
+        processor = PDFProcessor()
+        st.write("Extracting text and identifying diagrams...")
+        text_chunks, images_meta = processor.process_pdf(str(file_path))
+        progress_bar.progress(25)
+        st.write(f"Found {len(text_chunks)} text segments and {len(images_meta)} images.")
+        st.write("Generating vector embeddings for text search...")
+        text_emb = processor.embed_text(text_chunks)
+        progress_bar.progress(50)
+        st.write("Running CLIP model on diagrams (this may take a moment)...")
+        img_emb, valid_imgs = processor.embed_images(images_meta)
+        progress_bar.progress(75)
+        st.write(f"✅ {len(valid_imgs)} diagrams successfully indexed.")
 
-    text_emb = processor.embed_text(text_chunks)
-    img_emb, valid_imgs = processor.embed_images(images_meta)
+        #Vector Store Building
+        st.write("Building FAISS indices and saving to disk...")
+        store = VectorStore()
+        store.build_index(text_chunks, valid_imgs, text_emb, img_emb)
+        store.save()
+        st.write("Refreshing RAG memory...")
+        st.session_state.rag_system.refresh_index()
+        progress_bar.progress(100)
+        status.update(label="Manual Processing Complete!", state="complete", expanded=False)
 
-    store = VectorStore()
-    store.build_index(text_chunks, valid_imgs, text_emb, img_emb)
-    store.save()
-
-    st.session_state.rag_system.refresh_index()
-    st.toast("Indexing Complete.", icon="✅")
-
+    st.balloons()  # Visual celebration for your demo
+    st.toast("Manual is ready for questions.")
 
 def display_chat_messages():
     for msg in st.session_state.messages:
@@ -156,13 +172,15 @@ def run_pending_query():
             vlm_description = None
 
             if img_path:
+                st.toast("Processing image...")
                 vlm_description = rag.analyze_image_intent(img_path, prompt_text)
                 search_query = vlm_description
 
             retrieval = rag.retrieve(search_query)
 
             gen_prompt = (
-                f"User uploaded an image described as: '{vlm_description}'. User Question: {prompt_text}"
+                # f"User uploaded an image described as: '{vlm_description}'. User Question: {prompt_text}"
+                f"The assistant identified the relevant manual topic as: '{vlm_description}'. User Question: {prompt_text}"
                 if vlm_description
                 else prompt_text
             )
@@ -208,6 +226,23 @@ def run_pending_query():
             "vlm_analysis": vlm_description,
         }
     )
+
+def clear_index():
+    try:
+        if INDEX_DIR.exists(): shutil.rmtree(INDEX_DIR)
+        INDEX_DIR.mkdir(parents=True, exist_ok=True)
+        if IMAGES_DIR.exists(): shutil.rmtree(IMAGES_DIR)
+        IMAGES_DIR.mkdir(parents=True, exist_ok=True)
+
+        if "rag_system" in st.session_state:
+            st.session_state.rag_system.text_index = None
+        st.session_state.rag_system.vector_store = VectorStore()
+            
+        st.session_state.messages = []
+        st.success("Index and images cleared successfully!")
+        # st.rerun()
+    except Exception as e:
+        st.error(f"Error clearing index: {e}")
 
 
 def main():
@@ -268,6 +303,8 @@ def main():
             st.session_state.messages = []
             st.session_state.query_image = None
 
+        if st.button("Clear Index"):
+            clear_index()
 
     # Init state
     if "messages" not in st.session_state:
@@ -289,25 +326,24 @@ def main():
     )
 
     if prompt:
-        # Streamlit returns dict-like object when accept_file/accept_audio is enabled
         text = (prompt.text or "").strip()
 
-        # If audio exists and text is empty, transcribe audio -> text
+        #Audio Transcription
         if (not text) and getattr(prompt, "audio", None):
             try:
                 audio_bytes = prompt.audio.getvalue()
                 with st.spinner("Transcribing audio..."):
                     transcript = stt.transcribe_audio(audio_bytes)
                 text = (transcript or "").strip()
-            except Exception:
+            except Exception as e:
+                logger.error(f"Transcription failed: {e}")
                 text = ""
 
-        # Pick first image file (if any)
+        #Image Extraction
         img_bytes = None
         img_name = "upload.png"
-        files = getattr(prompt, "files", []) or []
+        files = getattr(prompt, "files", [])
         for f in files:
-            # best-effort image check by mimetype or extension
             ftype = (getattr(f, "type", "") or "").lower()
             fname = (getattr(f, "name", "") or "").lower()
             is_img = ftype.startswith("image/") or fname.endswith((".jpg", ".jpeg", ".png", ".webp"))
@@ -319,22 +355,19 @@ def main():
                     img_bytes = None
                 break
 
-        # If no inline files image, fall back to sidebar image (if any)
-        fallback_sidebar_img = st.session_state.get("query_image")
-
-        # Only queue if we have text (from typing or audio transcription)
-        if text:
+        # Check if we have a valid query (text or image)
+        if text or img_bytes:
+            img_path = None
             if img_bytes is not None:
-                queue_query(text, image_bytes=img_bytes, image_name=img_name)
-            else:
-                queue_query(text, image_file=fallback_sidebar_img)
+                img_path = str(UPLOAD_DIR / f"query_{img_name}")
+                with open(img_path, "wb") as f:
+                    f.write(img_bytes)
 
-            st.session_state.query_image = None
+            queue_query(text if text else "[Image Upload]", image_bytes=img_bytes, image_name=img_name)
+            
             st.rerun()
         else:
-            st.toast("Please type a question or record audio.", icon="⚠️")
-            st.session_state.query_image = None
-            st.rerun()
+            st.toast("Please provide a question, image, or audio.", icon="⚠️")
 
 
 if __name__ == "__main__":
