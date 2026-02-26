@@ -238,36 +238,40 @@ class RAGSystem:
         context_str = "\n\n".join(context_texts)
 
         messages = [
-            {
-                'role': 'system',
-                'content': (
-                    "You are a professional automotive service assistant helping a user "
-                    "perform maintenance or diagnostics using their official vehicle manual.\n\n"
-                    "RULES:\n"
-                    "- Answer strictly using the provided manual context.\n"
-                    "- Do NOT use outside knowledge or guess.\n"
-                    "- If the answer is not in the context, say: 'I couldn't find this information in the manual.'\n\n"
-                    "FORMATTING:\n"
-                    "- Use clear numbered steps (1, 2, 3) for procedures.\n"
-                    "- Put each step on its own line.\n"
-                    "- Use sub-steps (a, b, c) only when there are alternatives within a step.\n"
-                    "- Add a blank line between major steps for readability.\n"
-                    "- Bold important warnings with **WARNING:**.\n"
-                    "- Keep each step concise but complete.\n\n"
-                    "Example format:\n"
-                    "1. First step here.\n\n"
-                    "2. Second step here.\n\n"
-                    "3. Third step with options:\n"
-                    "   a. Option one.\n"
-                    "   b. Option two.\n\n"
-                    "**WARNING:** Safety note here."
-                )
-            },
-            {
-                'role': 'user',
-                'content': f"Context:\n{context_str}\n\nQuestion:\n{query}"
-            }
-        ]
+    {
+        'role': 'system',
+        'content': (
+            "You are a professional automotive service assistant helping a user "
+            "perform maintenance or diagnostics using ONLY their official vehicle manual.\n\n"
+            "CRITICAL RULES:\n"
+            "- Answer STRICTLY and ONLY using the provided manual context below.\n"
+            "- Do NOT use your own knowledge, training data, or general automotive knowledge.\n"
+            "- Do NOT improvise, guess, or fill in missing details.\n"
+            "- If the context does not contain a clear answer to the question, you MUST respond with EXACTLY:\n"
+            "  'I couldn't find this information in the manual.'\n"
+            "- Do NOT attempt a partial answer if the procedure is not explicitly described in the context.\n"
+            "- If the context mentions the topic but lacks full steps, say what the manual states and note that full details were not found.\n\n"
+            "FORMATTING (only when you DO have an answer from the context):\n"
+            "- Use clear numbered steps (1, 2, 3) for procedures.\n"
+            "- Put each step on its own line.\n"
+            "- Use sub-steps (a, b, c) only when there are alternatives within a step.\n"
+            "- Add a blank line between major steps for readability.\n"
+            "- Bold important warnings with **WARNING:**.\n"
+            "- Keep each step concise but complete.\n\n"
+            "Example format:\n"
+            "1. First step here.\n\n"
+            "2. Second step here.\n\n"
+            "3. Third step with options:\n"
+            "   a. Option one.\n"
+            "   b. Option two.\n\n"
+            "**WARNING:** Safety note here."
+        )
+    },
+    {
+        'role': 'user',
+        'content': f"Manual Context:\n{context_str}\n\nUser Question:\n{query}\n\nRemember: Only answer using the manual context above. If the answer is not there, say you couldn't find it."
+    }
+]
         try:
             response = ollama.chat(model=OLLAMA_MODEL_NAME, messages=messages)
             return response['message']['content']

@@ -179,12 +179,26 @@ def run_pending_query():
             retrieval = rag.retrieve(search_query)
 
             gen_prompt = (
-                # f"User uploaded an image described as: '{vlm_description}'. User Question: {prompt_text}"
                 f"The assistant identified the relevant manual topic as: '{vlm_description}'. User Question: {prompt_text}"
                 if vlm_description
                 else prompt_text
             )
             answer = rag.generate_answer(gen_prompt, retrieval)
+
+            # If the model says it couldn't find info, don't show images
+            no_info_phrases = [
+                "couldn't find this information",
+                "could not find this information",
+                "not in the manual",
+                "not found in the",
+                "no information available",
+                "couldn't find information",
+                "could not find information",
+                "i couldn't find",
+                "i could not find",
+            ]
+            if any(phrase in answer.lower() for phrase in no_info_phrases):
+                retrieval["images"] = []
 
         st.markdown(answer)
 
@@ -303,8 +317,27 @@ def main():
             st.session_state.messages = []
             st.session_state.query_image = None
 
-        if st.button("Clear Index"):
-            clear_index()
+        # Clear index button
+        if st.button("Clear Index", type="secondary"):
+
+            @st.dialog("Confirm Index Deletion")
+            def confirm_clear():
+                st.warning("Are you sure you want to delete the indexed manual data?")
+                st.caption("This action cannot be undone.")
+
+                col1, col2 = st.columns(2)
+
+                with col1:
+                    if st.button("Yes, Clear Index", type="primary"):
+                        clear_index()
+                        st.success("Index cleared successfully.")
+                        st.rerun()
+
+                with col2:
+                    if st.button("Cancel"):
+                        st.rerun()
+
+            confirm_clear()
 
     # Init state
     if "messages" not in st.session_state:
