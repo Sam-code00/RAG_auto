@@ -11,6 +11,8 @@ services:
     image: ollama/ollama:latest
     depends_on:
       - ollama
+    environment:
+      - OLLAMA_HOST=http://ollama:11434
     volumes:
       - ollama:/root/.ollama
     entrypoint: ["/bin/sh", "-lc"]
@@ -27,15 +29,16 @@ services:
     ports:
       - "8501:8501"
     volumes:
-      - ./data:/app/data
-      - ./models:/app/models
-      - ./assets:/app/assets
+      - data:/app/data
+      - models:/app/models
+      - ./assets:/app/assets:ro
     environment:
       - OLLAMA_HOST=http://ollama:11434
     depends_on:
-      - ollama
       - pull-models
     restart: unless-stopped
 
 volumes:
   ollama:
+  data:
+  models:
