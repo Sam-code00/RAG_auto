@@ -255,7 +255,8 @@ class PDFProcessor:
         if not images:
             return np.array([]).astype('float32'), []
         inputs = self.clip_processor(images=images, return_tensors="pt")
-        feats = self.clip_model.get_image_features(**inputs)
+        outputs = self.clip_model(**inputs)
+        feats = outputs.pooler_output
         feats = feats / feats.norm(p=2, dim=-1, keepdim=True)
         return feats.detach().numpy().astype('float32'), [images_metadata[i] for i in valid_idx]
 
