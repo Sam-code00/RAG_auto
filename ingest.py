@@ -13,8 +13,6 @@ from utils import (
 )
 
 logger = setup_logger(__name__)
-from PIL import ImageFile
-ImageFile.LOAD_TRUNCATED_IMAGES = True
 
 # Config
 MAX_CHUNK_CHARS = 1200
@@ -240,23 +238,17 @@ class PDFProcessor:
         images, valid_idx = [], []
         for i, m in enumerate(images_metadata):
             try:
-            # Open + force decode + normalize mode (prevents PIL crashes in CLIP preprocessing)
-                with Image.open(m["filepath"]) as im:
-                    im = im.convert("RGB")
-
-                    if im.size[0] < MIN_IMAGE_DIM or im.size[1] < MIN_IMAGE_DIM:
-                        continue
-                    images.append(im.copy())
-                    valid_idx.append(i)
-
+                img = Image.open(m["filepath"])
+                if img.size[0] < MIN_IMAGE_DIM or img.size[1] < MIN_IMAGE_DIM:
+                    continue
+                images.append(img)
+                valid_idx.append(i)
             except Exception as e:
-                logger.error(f"Image load failed {m['filepath']}: {type(e).__name__}: {e}")
-                continue
+                logger.error(f"Image load failed {m['filepath']}: {e}")
         if not images:
             return np.array([]).astype('float32'), []
         inputs = self.clip_processor(images=images, return_tensors="pt")
-        outputs = self.clip_model(**inputs)
-        feats = outputs.pooler_output
+        feats = self.clip_model.get_image_features(**inputs)
         feats = feats / feats.norm(p=2, dim=-1, keepdim=True)
         return feats.detach().numpy().astype('float32'), [images_metadata[i] for i in valid_idx]
 
