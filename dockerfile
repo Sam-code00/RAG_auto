@@ -13,28 +13,54 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
-# System deps (Whisper + common ML deps)
+# System deps (Whisper + PIL image decode + common runtime libs)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg \
     libgl1 \
     libglib2.0-0 \
+    libjpeg62-turbo \
+    zlib1g \
+    libpng16-16 \
     build-essential \
     git \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Python deps first (better caching)
 COPY requirements.txt /app/requirements.txt
-RUN python -m pip install --upgrade pip setuptools wheel && \
-    pip install -r requirements.txt
 
-# Copy the rest of your app
+RUN python -m pip install --upgrade pip setuptools wheel && \
+    \
+    # Install CPU torch from PyTorch wheel index (more reliable than torch==...+cpu in requirements)
+    pip install --no-cache-dir --extra-index-url https://download.pytorch.org/whl/cpu torch==2.6.0 && \
+    \
+    # Install the rest of requirements (ignore any torch line if present)
+    python - <<'PY'
+from pathlib import Path
+src = Path("/app/requirements.txt").read_text(encoding="utf-8").splitlines()
+filtered = []
+for line in src:
+    s = line.strip()
+    if not s or s.startswith("#"):
+        filtered.append(line)
+        continue
+    # drop torch pins (we install torch separately above)
+    if s.lower().startswith("torch==") or s.lower().startswith("torch>=") or s.lower().startswith("torch<"):
+        continue
+    # drop potential +cpu pin variants
+    if s.lower().startswith("torch==") and "+cpu" in s.lower():
+        continue
+    filtered.append(line)
+Path("/app/requirements.filtered.txt").write_text("\n".join(filtered) + "\n", encoding="utf-8")
+PY
+RUN pip install --no-cache-dir -r /app/requirements.filtered.txt
+
 COPY . /app
 
-# Ensure expected runtime dirs exist (your utils.py expects ./data and ./models) :contentReference[oaicite:1]{index=1}
+# Ensure expected runtime dirs exist (utils.py expects ./data and ./models)
 RUN mkdir -p /app/data/manuals /app/data/images /app/data/index /app/models && \
     mkdir -p "$HF_HOME" "$TORCH_HOME" "$XDG_CACHE_HOME"
 
-# Pre-download/cache models at build time (CLIP + Whisper) :contentReference[oaicite:2]{index=2}
+# Pre-download/cache models at build time (CLIP + Whisper)
 RUN python download_models.py
 
 EXPOSE 8501
