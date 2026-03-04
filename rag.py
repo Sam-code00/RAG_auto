@@ -55,7 +55,7 @@ class RAGSystem:
         else:
             logger.warning("No index found. Please ingest documents.")
 
-    def retrieve(self, query: str):
+    def retrieve(self, query: str, doc_id: str = None):
         if not self.vector_store.text_index:
             logger.warning("Attempted retrieval without index.")
             return {"text": [], "images": []}
@@ -64,51 +64,63 @@ class RAGSystem:
         response = ollama.embeddings(model=TEXT_EMBED_MODEL, prompt=query)
         query_embedding = np.array(response["embedding"], dtype="float32").reshape(1, -1)
 
-        K_PAGES = max(TOP_K_TEXT, 15)  # 15 is a good default
+        K_PAGES = max(TOP_K_TEXT, 15)
+        if doc_id:
+            K_PAGES = min(K_PAGES * 3, self.vector_store.text_index.ntotal)
         D, I = self.vector_store.text_index.search(query_embedding, K_PAGES)
 
         all_text_hits = []
         for idx in I[0]:
             if idx != -1 and idx < len(self.vector_store.text_metadata):
-                all_text_hits.append(self.vector_store.text_metadata[idx])
+                chunk = self.vector_store.text_metadata[idx]
+                if doc_id and chunk.get("doc_id") != doc_id:
+                    continue
+                all_text_hits.append(chunk)
 
-        retrieved_text = all_text_hits[:TOP_K_TEXT]  # keep answer context small/faithful
+        retrieved_text = all_text_hits[:TOP_K_TEXT]
 
+        # Detect which manuals the top text results came from
+        relevant_doc_ids = set()
+        for chunk in retrieved_text:
+            did = chunk.get("doc_id")
+            if did:
+                relevant_doc_ids.add(did)
 
-        # relevant_pages = set()
-        # for chunk in retrieved_text:
-        #     page = chunk.get("page")
-        #     if page is None:
-        #         continue
-        #     page = int(page)
-        #     relevant_pages.add(page)
-        #     for dp in (-3, -2, -1, 1, 2, 3):
-        #         pn = page + dp
-        #         if pn >= 1:
-        #             relevant_pages.add(pn)
-
-        relevant_pages = set()
+        relevant_pages = {}  # {doc_id: set of pages}
         for chunk in retrieved_text:
             page = chunk.get("page")
+            did = chunk.get("doc_id", "")
             if page is None:
                 continue
             page = int(page)
-            
-            # This adds the exact page the text was found on
-            relevant_pages.add(page)
+            if did not in relevant_pages:
+                relevant_pages[did] = set()
+            relevant_pages[did].add(page)
             for dp in (-1, 1):
                 pn = page + dp
-                if pn >= 1: # Ensure we don't try to look for page 0 or negative pages
-                    relevant_pages.add(pn)
+                if pn >= 1:
+                    relevant_pages[did].add(pn)
 
-        # Page-filter images
+        # Flatten for backward compat
+        all_relevant_pages = set()
+        for pages in relevant_pages.values():
+            all_relevant_pages.update(pages)
+
+        # Page-filter images, restrict to docs that had text hits
         page_filtered_images = []
         page_filtered_indices = []
 
         if getattr(self.vector_store, "image_metadata", None):
             for idx, meta in enumerate(self.vector_store.image_metadata):
+                img_doc = meta.get("doc_id", "")
+                if doc_id and img_doc != doc_id:
+                    continue
+                # When searching all, only pull images from manuals that had text hits
+                if not doc_id and img_doc not in relevant_doc_ids:
+                    continue
                 p = meta.get("page")
-                if p is not None and int(p) in relevant_pages:
+                doc_pages = relevant_pages.get(img_doc, set())
+                if p is not None and int(p) in doc_pages:
 
                     page_filtered_images.append(meta)
                     page_filtered_indices.append(idx)
@@ -117,9 +129,14 @@ class RAGSystem:
 
         if page_filtered_images and self.vector_store.image_index:
             try:
-                # CLIP text embedding
-                inputs = self.processor.clip_processor(text=[query], return_tensors="pt", padding=True)
-                text_features = self.processor.clip_model.get_text_features(**inputs)
+                # SigLIP2 text embedding
+                import torch
+                inputs = self.processor.clip_processor(
+                    text=[query], return_tensors="pt",
+                    padding="max_length", max_length=64
+                )
+                with torch.no_grad():
+                    text_features = self.processor.clip_model.get_text_features(**inputs)
                 text_features = text_features / text_features.norm(p=2, dim=-1, keepdim=True)
                 query_clip = text_features.detach().numpy().astype("float32")
 
@@ -223,19 +240,41 @@ class RAGSystem:
             retrieved_images = [img for img in page_filtered_images if img.get("page") == top_page][:3]
 
         logger.info(
-            f"Retrieved {len(retrieved_text)} text chunks from pages {sorted(relevant_pages)}, "
+            f"Retrieved {len(retrieved_text)} text chunks from docs {sorted(relevant_doc_ids)}, "
             f"{len(retrieved_images)} images (from {len(page_filtered_images)} page-filtered, "
             f"index_total={self.vector_store.image_index.ntotal if self.vector_store.image_index else 0})"
         )
 
         return {
             "text": retrieved_text,
-            "images": retrieved_images
+            "images": retrieved_images,
+            "source_docs": sorted(relevant_doc_ids),
         }
 
     def generate_answer(self, query, retrieval_results):
-        context_texts = [item['text'] for item in retrieval_results['text']]
-        context_str = "\n\n".join(context_texts)
+        # Check if results span multiple manuals
+        doc_ids = set()
+        for item in retrieval_results['text']:
+            did = item.get('doc_id', '')
+            if did:
+                doc_ids.add(did)
+
+        if len(doc_ids) > 1:
+            # Group context by manual
+            grouped = {}
+            for item in retrieval_results['text']:
+                did = item.get('doc_id', 'Unknown')
+                if did not in grouped:
+                    grouped[did] = []
+                grouped[did].append(item['text'])
+
+            context_parts = []
+            for did, texts in grouped.items():
+                context_parts.append(f"=== From {did} ===\n" + "\n\n".join(texts))
+            context_str = "\n\n".join(context_parts)
+        else:
+            context_texts = [item['text'] for item in retrieval_results['text']]
+            context_str = "\n\n".join(context_texts)
 
         messages = [
     {
@@ -250,7 +289,8 @@ class RAGSystem:
             "- If the context does not contain a clear answer to the question, you MUST respond with EXACTLY:\n"
             "  'I couldn't find this information in the manual.'\n"
             "- Do NOT attempt a partial answer if the procedure is not explicitly described in the context.\n"
-            "- If the context mentions the topic but lacks full steps, say what the manual states and note that full details were not found.\n\n"
+            "- If the context mentions the topic but lacks full steps, say what the manual states and note that full details were not found.\n"
+            "- If the context contains information from MULTIPLE manuals, clearly label which manual each answer comes from.\n\n"
             "FORMATTING (only when you DO have an answer from the context):\n"
             "- Use clear numbered steps (1, 2, 3) for procedures.\n"
             "- Put each step on its own line.\n"

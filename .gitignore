@@ -1,7 +1,5 @@
 __pycache__/
 *.pyc
-data/
 models/
-tests/
-data/
 .vscode/
+chunk_tests/

@@ -2,18 +2,18 @@ import os
 import urllib.request
 import zipfile
 from pathlib import Path
-from transformers import CLIPProcessor, CLIPModel
+from transformers import AutoModel, AutoProcessor
 
-# CLIP Model
-model_name = "openai/clip-vit-base-patch32"
+# SigLIP2 Model
+model_name = "google/siglip2-base-patch16-224"
 
 print(f"Downloading/Loading {model_name} to cache...")
 try:
-    CLIPModel.from_pretrained(model_name)
-    CLIPProcessor.from_pretrained(model_name)
-    print("Successfully cached CLIP model.")
+    AutoModel.from_pretrained(model_name)
+    AutoProcessor.from_pretrained(model_name)
+    print("Successfully cached SigLIP2 model.")
 except Exception as e:
-    print(f"Failed to download CLIP model: {e}")
+    print(f"Failed to download SigLIP2 model: {e}")
     print("Please ensure you have an active internet connection for this one-time setup step.")
 
 

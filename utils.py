@@ -19,7 +19,7 @@ VLM_MODEL_NAME = "qwen3-vl:8b"
 # VLM_MODEL_NAME = "moondream:latest"
 
 TEXT_EMBED_MODEL = "nomic-embed-text"
-IMAGE_EMBED_MODEL = "openai/clip-vit-base-patch32"
+IMAGE_EMBED_MODEL = "google/siglip2-base-patch16-224"
 
 # Chunking
 CHUNK_SIZE = 1500

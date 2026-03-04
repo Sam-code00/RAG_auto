@@ -1,0 +1,2 @@
+num_queries,avg_latency_sec,avg_retrieval_relevance_cosine,avg_answer_grounding_cosine,avg_procedural_coverage_pages
+20,5.99,0.669,0.798,4.8

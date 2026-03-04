@@ -1,5 +1,4 @@
 import os
-import base64
 import tempfile
 from pathlib import Path
 import shutil
@@ -17,14 +16,25 @@ st.set_page_config(page_title="SMART Assistant", layout="wide", page_icon="🚗"
 UPLOAD_DIR = IMAGES_DIR / "uploads"
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
-def load_css():
-    css_path = Path("assets/style.css")
-    if css_path.exists():
-        with open(css_path, "r", encoding="utf-8") as f:
-            st.markdown(f"<style>{f.read()}</style>", unsafe_allow_html=True)
+# Load CSS
+css_path = Path("assets/style.css")
+if css_path.exists():
+    st.markdown(f"<style>{open(css_path).read()}</style>", unsafe_allow_html=True)
 
-
-load_css()
+st.markdown("""
+<style>
+[data-testid="stSidebar"] { min-width: 340px; max-width: 340px; }
+[data-testid="stSidebar"] > div:first-child { width: 340px; }
+[data-testid="stSidebar"] [data-testid="stBaseButton-tertiary"] {
+    background: none !important; border: none !important; box-shadow: none !important;
+    padding: 0 !important; width: auto !important; color: #cc4444 !important;
+    font-size: 16px !important; text-decoration: none !important;
+    min-height: 0 !important; height: auto !important; margin-top: 10px !important;
+}
+[data-testid="stSidebar"] [data-testid="stBaseButton-tertiary"]:hover {
+    color: #ff4444 !important; transform: none !important; box-shadow: none !important;
+}
+</style>""", unsafe_allow_html=True)
 
 # Header
 col1, col2 = st.columns([5, 1])
@@ -35,6 +45,73 @@ with col2:
     if Path("assets/SMART.png").exists():
         st.image("assets/SMART.png", width=300)
 
+NO_INFO_PHRASES = [
+    "couldn't find this information", "could not find this information",
+    "not in the manual", "not found in the", "no information available",
+    "couldn't find information", "could not find information",
+    "i couldn't find", "i could not find",
+]
+
+
+# Shared rendering
+
+def render_images(images):
+    seen = set()
+    unique = [m for m in images if not (m.get("filepath", "") in seen or seen.add(m.get("filepath", "")))]
+    imgs = unique[:3]
+    if not imgs:
+        return
+    st.write("**Supporting Visuals:**")
+    cols = st.columns(len(imgs), gap="medium")
+    for i, meta in enumerate(imgs):
+        with cols[i]:
+            try:
+                doc_label = meta.get("doc_id", "")
+                caption = f"{doc_label} — Page {meta['page']}" if doc_label else f"Page {meta['page']}"
+                st.image(Image.open(meta["filepath"]), caption=caption, width=300)
+            except Exception:
+                pass
+
+
+def render_context(retrieval):
+    with st.expander("🔎 Retrieved Manual Context (Top matches)"):
+        if retrieval.get("text"):
+            for i, chunk in enumerate(retrieval["text"], start=1):
+                st.markdown(f"**{i}. Page {chunk.get('page', '?')}** — `{chunk.get('doc_id', '')}`")
+                txt = chunk.get("text", "")
+                st.write(txt[:600] + ("..." if len(txt) > 600 else ""))
+                st.markdown("---")
+        else:
+            st.write("No text chunks retrieved.")
+
+
+def render_answer(rag, prompt_text, vlm_description, retrieval):
+    gen_prompt = (
+        f"The assistant identified the relevant manual topic as: '{vlm_description}'. User Question: {prompt_text}"
+        if vlm_description else prompt_text
+    )
+    answer = rag.generate_answer(gen_prompt, retrieval)
+
+    if any(p in answer.lower() for p in NO_INFO_PHRASES):
+        retrieval["images"] = []
+
+    st.markdown(answer)
+
+    source_docs = retrieval.get("source_docs", [])
+    if len(source_docs) == 1:
+        st.caption(f"📚 Source: `{source_docs[0]}`")
+
+    if vlm_description:
+        st.info(f"**VLM Analysis:** {vlm_description}")
+
+    if retrieval.get("images"):
+        render_images(retrieval["images"])
+
+    render_context(retrieval)
+    return answer
+
+
+# Init
 
 def load_rag_system():
     if "rag_system" not in st.session_state:
@@ -51,49 +128,52 @@ def load_whisper():
         try:
             stt.load_model()
             st.session_state.whisper_loaded = True
-            logger.info("Whisper model loaded successfully")
         except Exception as e:
             st.session_state.whisper_loaded = False
             logger.warning(f"Whisper not loaded: {e}")
 
 
-def save_uploaded_file(uploaded_file):
+# Document processing
+
+def process_document(uploaded_file):
     save_path = MANUALS_DIR / uploaded_file.name
     with open(save_path, "wb") as f:
         f.write(uploaded_file.getbuffer())
-    return save_path
 
-
-def process_document(file_path):
-    # Show status of processing
     with st.status("Processing Manual...", expanded=True) as status:
-        st.write("Initializing PDF Processor...")
-        progress_bar = st.progress(0)
+        progress = st.progress(0)
         processor = PDFProcessor()
-        st.write("Extracting text and identifying diagrams...")
-        text_chunks, images_meta = processor.process_pdf(str(file_path))
-        progress_bar.progress(25)
-        st.write(f"Found {len(text_chunks)} text segments and {len(images_meta)} images.")
-        st.write("Generating vector embeddings for text search...")
-        text_emb = processor.embed_text(text_chunks)
-        progress_bar.progress(50)
-        st.write("Running CLIP model on diagrams (this may take a moment)...")
-        img_emb, valid_imgs = processor.embed_images(images_meta)
-        progress_bar.progress(75)
-        st.write(f"✅ {len(valid_imgs)} diagrams successfully indexed.")
 
-        #Vector Store Building
-        st.write("Building FAISS indices and saving to disk...")
-        store = VectorStore()
+        st.write("Extracting text and diagrams...")
+        text_chunks, images_meta = processor.process_pdf(str(save_path))
+        progress.progress(25)
+        st.write(f"Found {len(text_chunks)} text segments and {len(images_meta)} images.")
+
+        st.write("Generating text embeddings...")
+        text_emb = processor.embed_text(text_chunks)
+        progress.progress(50)
+
+        st.write("Running SigLIP2 on diagrams...")
+        img_emb, valid_imgs = processor.embed_images(images_meta)
+        progress.progress(75)
+
+        store = st.session_state.rag_system.vector_store
+        store.load()
         store.build_index(text_chunks, valid_imgs, text_emb, img_emb)
         store.save()
-        st.write("Refreshing RAG memory...")
         st.session_state.rag_system.refresh_index()
-        progress_bar.progress(100)
+        progress.progress(100)
         status.update(label="Manual Processing Complete!", state="complete", expanded=False)
 
-    st.balloons()  # Visual celebration for your demo
+    st.balloons()
     st.toast("Manual is ready for questions.")
+
+
+# Chat display
+
+def _on_pick_doc(doc):
+    st.session_state.picked_doc = doc
+
 
 def display_chat_messages():
     for msg in st.session_state.messages:
@@ -106,53 +186,39 @@ def display_chat_messages():
                 except Exception:
                     pass
 
+            if msg.get("source_doc"):
+                st.caption(f"📚 Source: `{msg['source_doc']}`")
+
             if msg.get("vlm_analysis"):
                 st.info(f"**VLM Analysis:** {msg['vlm_analysis']}")
 
+            if msg.get("disambiguation") and st.session_state.get("disambiguation"):
+                source_docs = msg.get("source_docs", [])
+                if source_docs:
+                    cols = st.columns(len(source_docs))
+                    for i, doc in enumerate(source_docs):
+                        with cols[i]:
+                            st.button(doc, key=f"hist_pick_{doc}", use_container_width=True,
+                                      on_click=_on_pick_doc, args=(doc,))
+
             if msg.get("images"):
-                st.write("**Supporting Visuals:**")
-                imgs = msg["images"][:3]
-                num_imgs = len(imgs)
-                if num_imgs:
-                    img_cols = st.columns(num_imgs, gap="medium")
-                    for i, img_meta in enumerate(imgs):
-                        with img_cols[i]:
-                            try:
-                                st.image(
-                                    Image.open(img_meta["filepath"]),
-                                    caption=f"Page {img_meta['page']}",
-                                    width=300,
-                                )
-                            except Exception:
-                                pass
+                render_images(msg["images"])
 
 
-def _save_bytes_to_temp_file(raw_bytes: bytes, filename: str) -> str:
-    suffix = "." + filename.split(".")[-1] if "." in filename else ".bin"
-    with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
-        tmp.write(raw_bytes)
-        return tmp.name
+# Query handling
 
-
-def queue_query(prompt_text: str, image_file=None, image_bytes: bytes = None, image_name: str = "upload.png"):
+def queue_query(prompt_text, image_bytes=None, image_name="upload.png"):
     user_msg = {"role": "user", "content": prompt_text}
     img_path = None
-
-    if image_file is not None:
+    if image_bytes is not None:
         try:
-            img_path = _save_bytes_to_temp_file(image_file.getbuffer(), image_file.name)
+            suffix = "." + image_name.split(".")[-1] if "." in image_name else ".png"
+            with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+                tmp.write(image_bytes)
+                img_path = tmp.name
+            user_msg["uploaded_image_path"] = img_path
         except Exception:
-            img_path = None
-
-    elif image_bytes is not None:
-        try:
-            img_path = _save_bytes_to_temp_file(image_bytes, image_name)
-        except Exception:
-            img_path = None
-
-    if img_path:
-        user_msg["uploaded_image_path"] = img_path
-
+            pass
     st.session_state.messages.append(user_msg)
     st.session_state.pending_query = {"prompt": prompt_text, "img_path": img_path}
 
@@ -162,242 +228,186 @@ def run_pending_query():
     if not pending:
         return
 
+    rag = st.session_state.rag_system
     prompt_text = pending["prompt"]
     img_path = pending["img_path"]
-    rag = st.session_state.rag_system
 
     with st.chat_message("assistant"):
         with st.spinner("Thinking..."):
             search_query = prompt_text
             vlm_description = None
-
             if img_path:
                 st.toast("Processing image...")
                 vlm_description = rag.analyze_image_intent(img_path, prompt_text)
                 search_query = vlm_description
 
-            retrieval = rag.retrieve(search_query)
+            retrieval = rag.retrieve(search_query, doc_id=st.session_state.get("active_doc_id"))
+            source_docs = retrieval.get("source_docs", [])
 
-            gen_prompt = (
-                f"The assistant identified the relevant manual topic as: '{vlm_description}'. User Question: {prompt_text}"
-                if vlm_description
-                else prompt_text
-            )
-            answer = rag.generate_answer(gen_prompt, retrieval)
+        # Multiple manuals matched — ask user to pick
+        if st.session_state.get("active_doc_id") is None and len(source_docs) > 1:
+            docs_str = ", ".join(f"**{d}**" for d in source_docs)
+            st.markdown(f"I found relevant information in multiple manuals: {docs_str}")
+            st.markdown("Which manual are you asking about?")
 
-            # If the model says it couldn't find info, don't show images
-            no_info_phrases = [
-                "couldn't find this information",
-                "could not find this information",
-                "not in the manual",
-                "not found in the",
-                "no information available",
-                "couldn't find information",
-                "could not find information",
-                "i couldn't find",
-                "i could not find",
-            ]
-            if any(phrase in answer.lower() for phrase in no_info_phrases):
-                retrieval["images"] = []
+            st.session_state.disambiguation = {
+                "prompt": prompt_text, "search_query": search_query,
+                "vlm_description": vlm_description, "img_path": img_path,
+                "source_docs": source_docs,
+            }
+            cols = st.columns(len(source_docs))
+            for i, doc in enumerate(source_docs):
+                with cols[i]:
+                    st.button(doc, key=f"pick_{doc}", use_container_width=True,
+                              on_click=_on_pick_doc, args=(doc,))
 
-        st.markdown(answer)
+            st.session_state.messages.append({
+                "role": "assistant",
+                "content": f"I found relevant information in multiple manuals: {docs_str}\nWhich manual are you asking about?",
+                "disambiguation": True, "source_docs": source_docs,
+            })
+            return
 
-        if vlm_description:
-            st.info(f"**VLM Analysis:** {vlm_description}")
+        # Single manual — answer directly
+        answer = render_answer(rag, prompt_text, vlm_description, retrieval)
+        st.session_state.messages.append({
+            "role": "assistant", "content": answer,
+            "images": retrieval.get("images", [])[:3], "vlm_analysis": vlm_description,
+        })
 
-        if retrieval.get("images"):
-            st.write("**Supporting Visuals:**")
-            imgs = retrieval["images"][:3]
-            img_cols = st.columns(len(imgs), gap="medium")
-            for i, img_meta in enumerate(imgs):
-                with img_cols[i]:
-                    try:
-                        st.image(
-                            Image.open(img_meta["filepath"]),
-                            caption=f"Page {img_meta['page']}",
-                            width=300,
-                        )
-                    except Exception:
-                        pass
 
-        with st.expander("🔎 Retrieved Manual Context (Top matches)"):
-            if retrieval.get("text"):
-                for i, chunk in enumerate(retrieval["text"], start=1):
-                    page = chunk.get("page", "?")
-                    doc = chunk.get("doc_id", "")
-                    txt = chunk.get("text", "")
-                    st.markdown(f"**{i}. Page {page}** — `{doc}`")
-                    st.write(txt[:600] + ("..." if len(txt) > 600 else ""))
-                    st.markdown("---")
-            else:
-                st.write("No text chunks retrieved.")
+def run_disambiguation():
+    picked = st.session_state.pop("picked_doc", None)
+    disambig = st.session_state.get("disambiguation")
+    if not picked or not disambig:
+        return False
 
-    st.session_state.messages.append(
-        {
-            "role": "assistant",
-            "content": answer,
-            "images": retrieval["images"][:3] if retrieval.get("images") else [],
-            "vlm_analysis": vlm_description,
-        }
-    )
+    rag = st.session_state.rag_system
+    st.session_state.messages.append({"role": "user", "content": picked})
 
-def clear_index():
-    try:
-        if INDEX_DIR.exists(): shutil.rmtree(INDEX_DIR)
-        INDEX_DIR.mkdir(parents=True, exist_ok=True)
-        if IMAGES_DIR.exists(): shutil.rmtree(IMAGES_DIR)
-        IMAGES_DIR.mkdir(parents=True, exist_ok=True)
+    # Disable buttons on old disambiguation message
+    for msg in st.session_state.messages:
+        if msg.get("disambiguation"):
+            msg["disambiguation"] = False
 
-        if "rag_system" in st.session_state:
-            st.session_state.rag_system.text_index = None
-        st.session_state.rag_system.vector_store = VectorStore()
-            
-        st.session_state.messages = []
-        st.success("Index and images cleared successfully!")
-        # st.rerun()
-    except Exception as e:
-        st.error(f"Error clearing index: {e}")
+    display_chat_messages()
 
+    with st.chat_message("assistant"):
+        with st.spinner("Searching manual..."):
+            retrieval = rag.retrieve(disambig["search_query"], doc_id=picked)
+            answer = render_answer(rag, disambig["prompt"], disambig["vlm_description"], retrieval)
+
+        source_docs = retrieval.get("source_docs", [])
+
+    st.session_state.messages.append({
+        "role": "assistant", "content": answer,
+        "images": retrieval.get("images", [])[:3], "vlm_analysis": disambig["vlm_description"],
+        "source_doc": source_docs[0] if len(source_docs) == 1 else None,
+    })
+    st.session_state.pop("disambiguation", None)
+    return True
+
+
+# Main
 
 def main():
     load_rag_system()
     load_whisper()
+    rag = st.session_state.rag_system
 
-    # Status toast
-    if st.session_state.rag_system.text_index:
-        st.toast(f"Index: {st.session_state.rag_system.text_index.ntotal} chunks", icon="📚")
+    if rag.text_index:
+        st.toast(f"Index: {rag.text_index.ntotal} chunks", icon="📚")
     else:
         st.toast("No index found. Upload a PDF manual to get started.", icon="📂")
 
-    # Sidebar
     with st.sidebar:
         st.header("Document Ingestion")
         pdf_file = st.file_uploader("Upload PDF Manual", type=["pdf"])
         if pdf_file and st.button("Process PDF"):
-            process_document(save_uploaded_file(pdf_file))
+            process_document(pdf_file)
 
         st.markdown("---")
         st.subheader("Indexed Manuals")
+        indexed_docs = rag.vector_store.get_indexed_doc_ids()
 
-        store = VectorStore()
-        if store.load():
-            chunks = store.text_metadata or []
-            indexed_docs = sorted({c.get("doc_id", "Unknown") for c in chunks if isinstance(c, dict)})
-
-            if indexed_docs:
-                cols = st.columns(2) 
-                for i, doc in enumerate(indexed_docs):
-                    with cols[i % 2]:
-                        st.markdown(
-                            f"""
-                            <div style="
-                                padding: 16px;
-                                border-radius: 12px;
-                                background-color: #1e1e1e;
-                                border: 1px solid #333;
-                                margin-bottom: 12px;
-                            ">
-                                <div style="font-weight:600; font-size:16px;">
-                                    📄 {doc}
-                                </div>
-                            </div>
-                            """,
-                            unsafe_allow_html=True
-                        )
-            else:
-                st.caption("Index loaded, but no doc metadata found.")
+        if indexed_docs:
+            for doc in indexed_docs:
+                chunks = sum(1 for c in rag.vector_store.text_metadata if isinstance(c, dict) and c.get("doc_id") == doc)
+                imgs = sum(1 for m in rag.vector_store.image_metadata if isinstance(m, dict) and m.get("doc_id") == doc)
+                c1, c2 = st.columns([6, 1], vertical_alignment="center")
+                with c1:
+                    st.markdown(f"""
+                    <div style="padding:12px 16px;border-radius:10px;background:#1e1e1e;border:1px solid #333;">
+                        <div style="font-weight:600;font-size:15px;">📄 {doc}</div>
+                        <div style="font-size:12px;color:#999;margin-top:4px;">{chunks} text chunks · {imgs} images</div>
+                    </div>""", unsafe_allow_html=True)
+                with c2:
+                    if st.button("✕", key=f"del_{doc}", type="tertiary"):
+                        rag.vector_store.remove_doc(doc)
+                        rag.refresh_index()
+                        st.rerun()
+                st.markdown("<div style='margin-bottom:8px;'></div>", unsafe_allow_html=True)
         else:
             st.caption("No manuals indexed yet.")
 
+        if len(indexed_docs) == 1:
+            st.session_state.active_doc_id = indexed_docs[0]
+        elif len(indexed_docs) > 1:
+            st.markdown("---")
+            st.subheader("Select Manual")
+            selected = st.selectbox("Answer from:", indexed_docs, index=0)
+            search_all = st.toggle("Search all manuals", value=False)
+            st.session_state.active_doc_id = None if search_all else selected
+        else:
+            st.session_state.active_doc_id = None
 
-
-        # Clear Chat Button
         st.markdown("---")
         if st.button("Clear Chat"):
             st.session_state.messages = []
-            st.session_state.query_image = None
 
-        # Clear index button
-        if st.button("Clear Index", type="secondary"):
-
-            @st.dialog("Confirm Index Deletion")
-            def confirm_clear():
-                st.warning("Are you sure you want to delete the indexed manual data?")
-                st.caption("This action cannot be undone.")
-
-                col1, col2 = st.columns(2)
-
-                with col1:
-                    if st.button("Yes, Clear Index", type="primary"):
-                        clear_index()
-                        st.success("Index cleared successfully.")
-                        st.rerun()
-
-                with col2:
-                    if st.button("Cancel"):
-                        st.rerun()
-
-            confirm_clear()
-
-    # Init state
     if "messages" not in st.session_state:
         st.session_state.messages = []
 
-    # Show chat
-    display_chat_messages()
+    did_disambiguate = run_disambiguation()
+    if not did_disambiguate:
+        display_chat_messages()
 
-    # Process any queued query
     run_pending_query()
 
     prompt = st.chat_input(
         placeholder="Ask a question about the manual...",
-        accept_file="multiple",                 
+        accept_file="multiple",
         file_type=["jpg", "jpeg", "png", "webp"],
-        accept_audio=True,
-        audio_sample_rate=16000,
-        key="chat_input",
+        accept_audio=True, audio_sample_rate=16000, key="chat_input",
     )
 
     if prompt:
         text = (prompt.text or "").strip()
 
-        #Audio Transcription
-        if (not text) and getattr(prompt, "audio", None):
+        if not text and getattr(prompt, "audio", None):
             try:
-                audio_bytes = prompt.audio.getvalue()
                 with st.spinner("Transcribing audio..."):
-                    transcript = stt.transcribe_audio(audio_bytes)
-                text = (transcript or "").strip()
+                    text = (stt.transcribe_audio(prompt.audio.getvalue()) or "").strip()
             except Exception as e:
                 logger.error(f"Transcription failed: {e}")
-                text = ""
 
-        #Image Extraction
-        img_bytes = None
-        img_name = "upload.png"
-        files = getattr(prompt, "files", [])
-        for f in files:
+        img_bytes, img_name = None, "upload.png"
+        for f in getattr(prompt, "files", []):
             ftype = (getattr(f, "type", "") or "").lower()
             fname = (getattr(f, "name", "") or "").lower()
-            is_img = ftype.startswith("image/") or fname.endswith((".jpg", ".jpeg", ".png", ".webp"))
-            if is_img:
+            if ftype.startswith("image/") or fname.endswith((".jpg", ".jpeg", ".png", ".webp")):
                 try:
                     img_bytes = f.getvalue()
                     img_name = f.name or img_name
                 except Exception:
-                    img_bytes = None
+                    pass
                 break
 
-        # Check if we have a valid query (text or image)
         if text or img_bytes:
-            img_path = None
-            if img_bytes is not None:
-                img_path = str(UPLOAD_DIR / f"query_{img_name}")
-                with open(img_path, "wb") as f:
+            if img_bytes:
+                with open(UPLOAD_DIR / f"query_{img_name}", "wb") as f:
                     f.write(img_bytes)
-
-            queue_query(text if text else "[Image Upload]", image_bytes=img_bytes, image_name=img_name)
-            
+            queue_query(text or "[Image Upload]", image_bytes=img_bytes, image_name=img_name)
             st.rerun()
         else:
             st.toast("Please provide a question, image, or audio.", icon="⚠️")

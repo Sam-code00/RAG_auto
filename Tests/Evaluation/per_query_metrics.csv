@@ -1,0 +1,21 @@
+QID,Query,latency_sec,retrieval_cosine,grounding_cosine,pages_unique,num_text_chunks,num_images_retrieved
+1,How do I check the engine oil level on the Lexus LC 500?,10.795,0.635,0.714,5,5,3
+2,How do I replace the key fob battery?,4.781,0.676,0.751,5,5,3
+3,How do I jump start the vehicle if the battery is dead?,2.254,0.694,0.747,4,5,3
+4,How do I reset the tire pressure warning light?,4.564,0.738,0.897,5,5,3
+5,Where are the fuse boxes located and how do I check a fuse?,3.22,0.611,0.701,4,5,3
+6,How do I change a flat tire using the jack?,8.995,0.623,0.704,4,5,3
+7,How do I activate and deactivate the parking brake?,5.229,0.78,0.94,5,5,3
+8,How do I use adaptive cruise control?,6.665,0.708,0.891,5,5,3
+9,How do I operate the windshield wipers and washer fluid?,3.412,0.668,0.823,5,5,3
+10,How do I open the hood safely?,2.385,0.619,0.686,5,5,3
+11,How do I adjust the driver seat and memory settings?,5.271,0.729,0.895,5,5,3
+12,How do I fold or adjust the side mirrors?,3.294,0.609,0.766,5,5,3
+13,What does the master warning light indicate?,2.885,0.618,0.78,5,5,3
+14,How do I pair a phone using Bluetooth?,3.367,0.645,0.789,5,5,3
+15,How do I use the Lexus Safety System+ features?,2.305,0.667,0.809,5,5,3
+16,How do I refill windshield washer fluid?,3.604,0.609,0.691,5,5,3
+17,How do I check coolant level?,2.432,0.625,0.696,5,5,3
+18,How do I use the drive mode selector?,11.469,0.742,0.918,4,5,3
+19,How do I use the remote keyless entry system?,8.572,0.7,0.889,5,5,3
+20,How do I enable or disable traction control?,2.65,0.694,0.835,5,5,3
